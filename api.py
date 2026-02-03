@@ -261,28 +261,87 @@ async def create_chat_completion_stream(request: ChatRequest):
     return StreamingResponse(generate(), media_type="text/plain")
 
 
+DEFAULT_SYSTEM_PROMPT = """You are a helpful assistant that provides clear, structured responses.
+
+Guidelines:
+- Be direct and concise
+- Use markdown formatting for clarity
+- For lists, use bullet points or numbered lists
+- For technical content, use code blocks with language tags
+- Structure long responses with headers (##)
+- End with a brief summary if the response is lengthy"""
+
+
 class QueryRequest(BaseModel):
     query: str = Field(..., description="The query to send to the LLM")
-    system_prompt: Optional[str] = Field(default=None, description="Optional system prompt")
+    system_prompt: Optional[str] = Field(default=None, description="Custom system prompt (overrides default)")
+    output_format: Optional[str] = Field(default="markdown", description="Output format: markdown, json, or plain")
     max_tokens: int = Field(default=512, ge=1, le=4096, description="Maximum tokens per request")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
 
 
 class QueryResponse(BaseModel):
+    query: str
     response: str
+    format: str
     tokens_generated: int
+    structured: Optional[dict] = Field(default=None, description="Parsed JSON if output_format is json")
+
+
+def _build_system_prompt(output_format: str, custom_prompt: Optional[str]) -> str:
+    """Build system prompt based on output format."""
+    if custom_prompt:
+        return custom_prompt
+
+    if output_format == "json":
+        return """You are a helpful assistant that returns structured JSON responses.
+
+Guidelines:
+- Always return valid JSON
+- Use consistent key names (snake_case)
+- Include a "summary" field for the main answer
+- Include a "details" field for additional information as an array
+- Include a "confidence" field (high/medium/low) when applicable
+- Do not include markdown formatting or code blocks, just raw JSON"""
+
+    if output_format == "plain":
+        return """You are a helpful assistant that provides clear, direct responses.
+
+Guidelines:
+- Be concise and direct
+- No markdown formatting
+- Use simple line breaks for structure
+- Avoid unnecessary preamble"""
+
+    return DEFAULT_SYSTEM_PROMPT
+
+
+def _try_parse_json(content: str) -> Optional[dict]:
+    """Try to parse JSON from response, handling code blocks."""
+    content = content.strip()
+    # Remove markdown code blocks if present
+    if content.startswith("```"):
+        lines = content.split("\n")
+        content = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return None
 
 
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
     """
-    Simple query endpoint - sends a query and returns a complete response.
+    Query endpoint with structured output support.
     Automatically continues until the model finishes.
     """
-    messages = []
-    if request.system_prompt:
-        messages.append(ChatMessage(role="system", content=request.system_prompt))
-    messages.append(ChatMessage(role="user", content=request.query))
+    output_format = request.output_format or "markdown"
+    system_prompt = _build_system_prompt(output_format, request.system_prompt)
+
+    messages = [
+        ChatMessage(role="system", content=system_prompt),
+        ChatMessage(role="user", content=request.query),
+    ]
 
     chat_request = ChatRequest(
         messages=messages,
@@ -291,9 +350,18 @@ async def query(request: QueryRequest):
         continue_until_done=True,
     )
     result = await create_chat_completion(chat_request)
+
+    response_content = result.message.content
+    structured = None
+    if output_format == "json":
+        structured = _try_parse_json(response_content)
+
     return QueryResponse(
-        response=result.message.content,
+        query=request.query,
+        response=response_content,
+        format=output_format,
         tokens_generated=result.tokens_generated,
+        structured=structured,
     )
 
 
@@ -301,6 +369,7 @@ async def query(request: QueryRequest):
 async def query_get(
     q: str,
     system: Optional[str] = None,
+    format: str = "markdown",
     max_tokens: int = 512,
     temperature: float = 0.7,
 ):
@@ -308,6 +377,7 @@ async def query_get(
     request = QueryRequest(
         query=q,
         system_prompt=system,
+        output_format=format,
         max_tokens=max_tokens,
         temperature=temperature,
     )

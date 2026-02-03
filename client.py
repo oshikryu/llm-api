@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import httpx
 
@@ -63,10 +64,17 @@ def chat_stream(messages: list[dict], max_tokens: int = 512, temperature: float 
     print()  # Newline at end
 
 
-def query(q: str, system_prompt: str | None = None, max_tokens: int = 512, temperature: float = 0.7) -> str:
-    """Simple query - returns complete response."""
+def query(
+    q: str,
+    system_prompt: str | None = None,
+    output_format: str = "markdown",
+    max_tokens: int = 512,
+    temperature: float = 0.7,
+) -> dict:
+    """Simple query - returns complete structured response."""
     payload = {
         "query": q,
+        "output_format": output_format,
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
@@ -79,7 +87,7 @@ def query(q: str, system_prompt: str | None = None, max_tokens: int = 512, tempe
         timeout=600.0,
     )
     response.raise_for_status()
-    return response.json()["response"]
+    return response.json()
 
 
 def health_check() -> dict:
@@ -94,10 +102,12 @@ if __name__ == "__main__":
     parser.add_argument("--chat", action="store_true", help="Use chat mode (streaming)")
     parser.add_argument("--completion", action="store_true", help="Use raw completion mode")
     parser.add_argument("--system", type=str, help="System prompt for query mode")
+    parser.add_argument("--format", type=str, default="markdown", choices=["markdown", "json", "plain"], help="Output format")
     parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens per request")
     parser.add_argument("--temperature", type=float, default=0.7, help="Temperature")
     parser.add_argument("--no-continue", dest="continue_until_done", action="store_false", help="Stop at max_tokens instead of continuing")
     parser.add_argument("--no-stream", dest="stream", action="store_false", help="Disable streaming output")
+    parser.add_argument("--raw", action="store_true", help="Print raw JSON response")
     parser.add_argument("--health", action="store_true", help="Check health status")
 
     args = parser.parse_args()
@@ -135,9 +145,15 @@ if __name__ == "__main__":
             result = query(
                 args.prompt,
                 system_prompt=args.system,
+                output_format=args.format,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
             )
-            print(result)
+            if args.raw:
+                print(json.dumps(result, indent=2))
+            elif args.format == "json" and result.get("structured"):
+                print(json.dumps(result["structured"], indent=2))
+            else:
+                print(result["response"])
     else:
         parser.print_help()
