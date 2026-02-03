@@ -261,6 +261,59 @@ async def create_chat_completion_stream(request: ChatRequest):
     return StreamingResponse(generate(), media_type="text/plain")
 
 
+class QueryRequest(BaseModel):
+    query: str = Field(..., description="The query to send to the LLM")
+    system_prompt: Optional[str] = Field(default=None, description="Optional system prompt")
+    max_tokens: int = Field(default=512, ge=1, le=4096, description="Maximum tokens per request")
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
+
+
+class QueryResponse(BaseModel):
+    response: str
+    tokens_generated: int
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query(request: QueryRequest):
+    """
+    Simple query endpoint - sends a query and returns a complete response.
+    Automatically continues until the model finishes.
+    """
+    messages = []
+    if request.system_prompt:
+        messages.append(ChatMessage(role="system", content=request.system_prompt))
+    messages.append(ChatMessage(role="user", content=request.query))
+
+    chat_request = ChatRequest(
+        messages=messages,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+        continue_until_done=True,
+    )
+    result = await create_chat_completion(chat_request)
+    return QueryResponse(
+        response=result.message.content,
+        tokens_generated=result.tokens_generated,
+    )
+
+
+@app.get("/query")
+async def query_get(
+    q: str,
+    system: Optional[str] = None,
+    max_tokens: int = 512,
+    temperature: float = 0.7,
+):
+    """GET version for simple queries via URL."""
+    request = QueryRequest(
+        query=q,
+        system_prompt=system,
+        max_tokens=max_tokens,
+        temperature=temperature,
+    )
+    return await query(request)
+
+
 @app.post("/analyze")
 async def analyze_text(prompt: str, context: Optional[str] = None):
     """

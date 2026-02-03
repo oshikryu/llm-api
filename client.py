@@ -63,6 +63,25 @@ def chat_stream(messages: list[dict], max_tokens: int = 512, temperature: float 
     print()  # Newline at end
 
 
+def query(q: str, system_prompt: str | None = None, max_tokens: int = 512, temperature: float = 0.7) -> str:
+    """Simple query - returns complete response."""
+    payload = {
+        "query": q,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if system_prompt:
+        payload["system_prompt"] = system_prompt
+
+    response = httpx.post(
+        f"{API_URL}/query",
+        json=payload,
+        timeout=600.0,
+    )
+    response.raise_for_status()
+    return response.json()["response"]
+
+
 def health_check() -> dict:
     """Check API and LLM server health."""
     response = httpx.get(f"{API_URL}/health", timeout=5.0)
@@ -72,7 +91,9 @@ def health_check() -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Query the local LLM API")
     parser.add_argument("prompt", nargs="?", help="Prompt to send to the LLM")
-    parser.add_argument("--chat", action="store_true", help="Use chat mode")
+    parser.add_argument("--chat", action="store_true", help="Use chat mode (streaming)")
+    parser.add_argument("--completion", action="store_true", help="Use raw completion mode")
+    parser.add_argument("--system", type=str, help="System prompt for query mode")
     parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens per request")
     parser.add_argument("--temperature", type=float, default=0.7, help="Temperature")
     parser.add_argument("--no-continue", dest="continue_until_done", action="store_false", help="Stop at max_tokens instead of continuing")
@@ -84,7 +105,16 @@ if __name__ == "__main__":
     if args.health:
         print(health_check())
     elif args.prompt:
-        if args.chat:
+        if args.completion:
+            # Raw completion mode
+            result = completion(
+                args.prompt,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+            )
+            print(result)
+        elif args.chat:
+            # Streaming chat mode
             if args.stream:
                 chat_stream(
                     [{"role": "user", "content": args.prompt}],
@@ -101,8 +131,10 @@ if __name__ == "__main__":
                 )
                 print(result)
         else:
-            result = completion(
+            # Default: simple query mode (complete response)
+            result = query(
                 args.prompt,
+                system_prompt=args.system,
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
             )
