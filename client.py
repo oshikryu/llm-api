@@ -26,7 +26,7 @@ def completion(prompt: str, max_tokens: int = 512, temperature: float = 0.7) -> 
     return response.json()["text"]
 
 
-def chat(messages: list[dict], max_tokens: int = 512, temperature: float = 0.7) -> str:
+def chat(messages: list[dict], max_tokens: int = 512, temperature: float = 0.7, continue_until_done: bool = False) -> str:
     """Send a chat request to the API."""
     response = httpx.post(
         f"{API_URL}/chat",
@@ -34,8 +34,9 @@ def chat(messages: list[dict], max_tokens: int = 512, temperature: float = 0.7) 
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "continue_until_done": continue_until_done,
         },
-        timeout=120.0,
+        timeout=600.0 if continue_until_done else 120.0,
     )
     response.raise_for_status()
     return response.json()["message"]["content"]
@@ -51,8 +52,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Query the local LLM API")
     parser.add_argument("prompt", nargs="?", help="Prompt to send to the LLM")
     parser.add_argument("--chat", action="store_true", help="Use chat mode")
-    parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens")
+    parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens per request")
     parser.add_argument("--temperature", type=float, default=0.7, help="Temperature")
+    parser.add_argument("--continue", dest="continue_until_done", action="store_true", help="Continue until model finishes")
     parser.add_argument("--health", action="store_true", help="Check health status")
 
     args = parser.parse_args()
@@ -65,6 +67,7 @@ if __name__ == "__main__":
                 [{"role": "user", "content": args.prompt}],
                 max_tokens=args.max_tokens,
                 temperature=args.temperature,
+                continue_until_done=args.continue_until_done,
             )
         else:
             result = completion(

@@ -6,7 +6,7 @@ API wrapper for querying a local llama-server instance.
 
 1. Start the llama-server:
 ```bash
-llama-server -hf ggml-org/gpt-oss-20b-GGUF --port 8080 --threads 10 --ctx-size 4096 --n-predict 512
+llama-server -hf ggml-org/gpt-oss-20b-GGUF --port 8080 -ngl 99 --ctx-size 8192 --n-predict 512 --batch-size 512 --ubatch-size 128
 ```
 
 2. Install Python dependencies:

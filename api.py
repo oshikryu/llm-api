@@ -37,10 +37,11 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(..., description="Chat messages")
-    max_tokens: int = Field(default=512, ge=1, le=4096, description="Maximum tokens to generate")
+    max_tokens: int = Field(default=512, ge=1, le=4096, description="Maximum tokens per request")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Sampling temperature")
     top_p: float = Field(default=0.9, ge=0.0, le=1.0, description="Top-p sampling")
     stop: Optional[list[str]] = Field(default=None, description="Stop sequences")
+    continue_until_done: bool = Field(default=False, description="Continue generating until model stops naturally")
 
 
 class CompletionResponse(BaseModel):
@@ -108,35 +109,57 @@ async def create_completion(request: CompletionRequest):
 @app.post("/chat", response_model=ChatResponse)
 async def create_chat_completion(request: ChatRequest):
     """Generate a chat completion (OpenAI-compatible endpoint)."""
-    payload = {
-        "messages": [{"role": m.role, "content": m.content} for m in request.messages],
-        "max_tokens": request.max_tokens,
-        "temperature": request.temperature,
-        "top_p": request.top_p,
-    }
-    if request.stop:
-        payload["stop"] = request.stop
+    messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    full_content = ""
+    total_completion_tokens = 0
+    total_prompt_tokens = 0
+    max_continuations = 20  # Safety limit
 
+    timeout = 600.0 if request.continue_until_done else 120.0
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{LLAMA_SERVER_URL}/v1/chat/completions",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for _ in range(max_continuations):
+                payload = {
+                    "messages": messages,
+                    "max_tokens": request.max_tokens,
+                    "temperature": request.temperature,
+                    "top_p": request.top_p,
+                }
+                if request.stop:
+                    payload["stop"] = request.stop
 
-            choice = data.get("choices", [{}])[0]
-            message = choice.get("message", {})
-            usage = data.get("usage", {})
+                response = await client.post(
+                    f"{LLAMA_SERVER_URL}/v1/chat/completions",
+                    json=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                choice = data.get("choices", [{}])[0]
+                message = choice.get("message", {})
+                usage = data.get("usage", {})
+                finish_reason = choice.get("finish_reason", "stop")
+
+                content = message.get("content", "")
+                full_content += content
+                total_completion_tokens += usage.get("completion_tokens", 0)
+                total_prompt_tokens = usage.get("prompt_tokens", 0)  # Only count once
+
+                # Stop if model finished naturally or continue_until_done is disabled
+                if finish_reason != "length" or not request.continue_until_done:
+                    break
+
+                # Append assistant response and continue
+                messages.append({"role": "assistant", "content": content})
+                messages.append({"role": "user", "content": "Continue from where you left off."})
 
             return ChatResponse(
                 message=ChatMessage(
-                    role=message.get("role", "assistant"),
-                    content=message.get("content", ""),
+                    role="assistant",
+                    content=full_content,
                 ),
-                tokens_generated=usage.get("completion_tokens", 0),
-                tokens_prompt=usage.get("prompt_tokens", 0),
+                tokens_generated=total_completion_tokens,
+                tokens_prompt=total_prompt_tokens,
             )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="LLM request timed out")
