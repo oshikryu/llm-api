@@ -82,8 +82,8 @@ print(result)
 CLI usage:
 ```bash
 python client.py "What is machine learning?"
-python client.py --chat "Hello, how are you?"
-python client.py --chat --continue "Write a detailed essay on AI"  # Continue until done
+python client.py --chat "Hello, how are you?"  # Continues until done by default
+python client.py --chat --no-continue "Quick question"  # Stop at max_tokens
 python client.py --max-tokens 1024 "Your prompt"
 python client.py --health
 ```

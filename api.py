@@ -8,10 +8,12 @@ Then run this API:
     uvicorn api:app --reload --port 8000
 """
 
+import json
 import httpx
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, AsyncGenerator
 
 app = FastAPI(
     title="Local LLM API",
@@ -106,6 +108,22 @@ async def create_completion(request: CompletionRequest):
         raise HTTPException(status_code=500, detail=f"LLM request failed: {str(e)}")
 
 
+def _looks_complete(content: str, tokens_generated: int, max_tokens: int) -> bool:
+    """Heuristics to detect if a response looks complete."""
+    # If we generated far fewer tokens than allowed, model likely finished
+    if tokens_generated < max_tokens * 0.5:
+        return True
+    # Check for natural ending patterns
+    stripped = content.rstrip()
+    if stripped.endswith(('.', '!', '?', '```', '"', "'")):
+        # Ends with sentence-ending punctuation or code block
+        return True
+    # Check for list/structured content that ends cleanly
+    if stripped.endswith(':') or stripped.endswith('-'):
+        return False  # Likely mid-list
+    return False
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def create_chat_completion(request: ChatRequest):
     """Generate a chat completion (OpenAI-compatible endpoint)."""
@@ -113,12 +131,12 @@ async def create_chat_completion(request: ChatRequest):
     full_content = ""
     total_completion_tokens = 0
     total_prompt_tokens = 0
-    max_continuations = 20  # Safety limit
+    max_continuations = 25  # Safety limit
 
     timeout = 600.0 if request.continue_until_done else 120.0
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            for _ in range(max_continuations):
+            for iteration in range(max_continuations):
                 payload = {
                     "messages": messages,
                     "max_tokens": request.max_tokens,
@@ -141,17 +159,25 @@ async def create_chat_completion(request: ChatRequest):
                 finish_reason = choice.get("finish_reason", "stop")
 
                 content = message.get("content", "")
+                tokens_generated = usage.get("completion_tokens", 0)
                 full_content += content
-                total_completion_tokens += usage.get("completion_tokens", 0)
-                total_prompt_tokens = usage.get("prompt_tokens", 0)  # Only count once
+                total_completion_tokens += tokens_generated
+                if iteration == 0:
+                    total_prompt_tokens = usage.get("prompt_tokens", 0)
 
-                # Stop if model finished naturally or continue_until_done is disabled
-                if finish_reason != "length" or not request.continue_until_done:
+                # Stop conditions
+                if not request.continue_until_done:
+                    break
+                if finish_reason == "stop":
+                    break
+                if _looks_complete(content, tokens_generated, request.max_tokens):
+                    break
+                # Empty or very short response means model is done
+                if len(content.strip()) < 10:
                     break
 
-                # Append assistant response and continue
+                # Append assistant response - model will continue from here
                 messages.append({"role": "assistant", "content": content})
-                messages.append({"role": "user", "content": "Continue from where you left off."})
 
             return ChatResponse(
                 message=ChatMessage(
@@ -167,6 +193,72 @@ async def create_chat_completion(request: ChatRequest):
         raise HTTPException(status_code=e.response.status_code, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM request failed: {str(e)}")
+
+
+@app.post("/chat/stream")
+async def create_chat_completion_stream(request: ChatRequest):
+    """Stream chat completion with continuation support."""
+
+    async def generate() -> AsyncGenerator[bytes, None]:
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        max_continuations = 25
+
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            for iteration in range(max_continuations):
+                payload = {
+                    "messages": messages,
+                    "max_tokens": request.max_tokens,
+                    "temperature": request.temperature,
+                    "top_p": request.top_p,
+                    "stream": True,
+                }
+                if request.stop:
+                    payload["stop"] = request.stop
+
+                content_chunk = ""
+                finish_reason = None
+                tokens_generated = 0
+
+                async with client.stream(
+                    "POST",
+                    f"{LLAMA_SERVER_URL}/v1/chat/completions",
+                    json=payload,
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]  # Remove "data: " prefix
+                        if data_str.strip() == "[DONE]":
+                            continue
+
+                        try:
+                            data = json.loads(data_str)
+                            choice = data.get("choices", [{}])[0]
+                            delta = choice.get("delta", {})
+                            token = delta.get("content", "")
+                            finish_reason = choice.get("finish_reason")
+
+                            if token:
+                                content_chunk += token
+                                tokens_generated += 1
+                                yield token.encode("utf-8")
+                        except json.JSONDecodeError:
+                            continue
+
+                # Stop conditions
+                if not request.continue_until_done:
+                    break
+                if finish_reason == "stop":
+                    break
+                if _looks_complete(content_chunk, tokens_generated, request.max_tokens):
+                    break
+                if len(content_chunk.strip()) < 10:
+                    break
+
+                # Append for next iteration
+                messages.append({"role": "assistant", "content": content_chunk})
+
+    return StreamingResponse(generate(), media_type="text/plain")
 
 
 @app.post("/analyze")
