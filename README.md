@@ -48,9 +48,12 @@ POST /chat
         {"role": "user", "content": "Hello!"}
     ],
     "max_tokens": 512,
-    "temperature": 0.7
+    "temperature": 0.7,
+    "continue_until_done": true
 }
 ```
+
+Set `continue_until_done: true` to keep generating until the model finishes naturally, instead of stopping at `max_tokens`.
 
 ### Analyze (convenience endpoint)
 ```
@@ -80,6 +83,8 @@ CLI usage:
 ```bash
 python client.py "What is machine learning?"
 python client.py --chat "Hello, how are you?"
+python client.py --chat --continue "Write a detailed essay on AI"  # Continue until done
+python client.py --max-tokens 1024 "Your prompt"
 python client.py --health
 ```
 

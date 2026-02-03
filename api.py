@@ -2,7 +2,7 @@
 API for querying local LLM running on llama-server.
 
 Start the llama-server first:
-    llama-server -hf ggml-org/gpt-oss-20b-GGUF --port 8080 --threads 10 --ctx-size 4096 --n-predict 512
+    llama-server -hf ggml-org/gpt-oss-20b-GGUF --port 8080 -ngl 99 --ctx-size 8192 --n-predict 512 --batch-size 512 --ubatch-size 128
 
 Then run this API:
     uvicorn api:app --reload --port 8000
