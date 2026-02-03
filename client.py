@@ -1,0 +1,77 @@
+"""
+Example client for the Local LLM API.
+
+Usage:
+    python client.py "What are the O-1A visa criteria?"
+"""
+
+import argparse
+import httpx
+
+API_URL = "http://localhost:8000"
+
+
+def completion(prompt: str, max_tokens: int = 512, temperature: float = 0.7) -> str:
+    """Send a completion request to the API."""
+    response = httpx.post(
+        f"{API_URL}/completion",
+        json={
+            "prompt": prompt,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    return response.json()["text"]
+
+
+def chat(messages: list[dict], max_tokens: int = 512, temperature: float = 0.7) -> str:
+    """Send a chat request to the API."""
+    response = httpx.post(
+        f"{API_URL}/chat",
+        json={
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        },
+        timeout=120.0,
+    )
+    response.raise_for_status()
+    return response.json()["message"]["content"]
+
+
+def health_check() -> dict:
+    """Check API and LLM server health."""
+    response = httpx.get(f"{API_URL}/health", timeout=5.0)
+    return response.json()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Query the local LLM API")
+    parser.add_argument("prompt", nargs="?", help="Prompt to send to the LLM")
+    parser.add_argument("--chat", action="store_true", help="Use chat mode")
+    parser.add_argument("--max-tokens", type=int, default=512, help="Max tokens")
+    parser.add_argument("--temperature", type=float, default=0.7, help="Temperature")
+    parser.add_argument("--health", action="store_true", help="Check health status")
+
+    args = parser.parse_args()
+
+    if args.health:
+        print(health_check())
+    elif args.prompt:
+        if args.chat:
+            result = chat(
+                [{"role": "user", "content": args.prompt}],
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+            )
+        else:
+            result = completion(
+                args.prompt,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+            )
+        print(result)
+    else:
+        parser.print_help()
