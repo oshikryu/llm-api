@@ -15,11 +15,14 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, AsyncGenerator
 
+from rag import rag_router
+
 app = FastAPI(
     title="Local LLM API",
     description="API for querying local llama-server",
     version="1.0.0",
 )
+app.include_router(rag_router, tags=["RAG"])
 
 LLAMA_SERVER_URL = "http://localhost:8080"
 
