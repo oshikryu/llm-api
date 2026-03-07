@@ -10,6 +10,7 @@ Then run this API:
 
 import asyncio
 import json
+import time
 import uuid
 from contextlib import asynccontextmanager
 
@@ -160,6 +161,201 @@ async def get_me(
         "name": user.name,
         "is_admin": user.is_admin,
     }
+
+
+# ---------------------------------------------------------------------------
+# Billing & Usage (self-service)
+# ---------------------------------------------------------------------------
+
+
+class ModelUsage(BaseModel):
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class ModelLimit(BaseModel):
+    model: str
+    max_total_tokens: int
+    current_total_tokens: int
+    remaining_tokens: int | None = Field(
+        description="Tokens remaining before limit, null if unlimited",
+    )
+    usage_percent: float | None = Field(
+        description="Percentage of limit used, null if unlimited",
+    )
+
+
+class BillingResponse(BaseModel):
+    user_id: str
+    name: str
+    usage: list[ModelUsage]
+    limits: list[ModelLimit]
+    rate_limit: dict
+
+
+async def _scan_keys(redis, pattern: str) -> list[str]:
+    """Collect all keys matching a pattern via SCAN."""
+    keys: list[str] = []
+    cursor = "0"
+    while True:
+        cursor, batch = await redis.scan(cursor=cursor, match=pattern, count=100)
+        keys.extend(batch)
+        if cursor == "0" or cursor == 0:
+            break
+    return keys
+
+
+@app.get("/usage", response_model=list[ModelUsage])
+async def get_my_usage(
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """View your own token usage across all models."""
+    keys = await _scan_keys(redis, f"llmapi:usage:{user.user_id}:*")
+    usages = []
+    for key in keys:
+        model = key.split(f"llmapi:usage:{user.user_id}:")[1]
+        data = await redis.hgetall(key)
+        prompt = int(data.get("prompt_tokens", 0))
+        completion = int(data.get("completion_tokens", 0))
+        usages.append(ModelUsage(
+            model=model,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
+        ))
+    return usages
+
+
+@app.get("/usage/{model}", response_model=ModelUsage)
+async def get_my_usage_by_model(
+    model: str,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """View your own token usage for a specific model."""
+    data = await redis.hgetall(f"llmapi:usage:{user.user_id}:{model}")
+    prompt = int(data.get("prompt_tokens", 0))
+    completion = int(data.get("completion_tokens", 0))
+    return ModelUsage(
+        model=model,
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=prompt + completion,
+    )
+
+
+@app.get("/limits", response_model=list[ModelLimit])
+async def get_my_limits(
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """View your token limits and remaining budget across all models."""
+    # Gather all models with either limits or usage
+    limit_keys = await _scan_keys(redis, f"llmapi:limits:{user.user_id}:*")
+    usage_keys = await _scan_keys(redis, f"llmapi:usage:{user.user_id}:*")
+
+    models = set()
+    for key in limit_keys:
+        models.add(key.split(f"llmapi:limits:{user.user_id}:")[1])
+    for key in usage_keys:
+        models.add(key.split(f"llmapi:usage:{user.user_id}:")[1])
+
+    results = []
+    for model in sorted(models):
+        limits = await redis.hgetall(f"llmapi:limits:{user.user_id}:{model}")
+        max_total = int(limits.get("max_total_tokens", 0))
+
+        usage = await redis.hgetall(f"llmapi:usage:{user.user_id}:{model}")
+        current = int(usage.get("prompt_tokens", 0)) + int(usage.get("completion_tokens", 0))
+
+        remaining = None
+        pct = None
+        if max_total > 0:
+            remaining = max(0, max_total - current)
+            pct = round(current / max_total * 100, 1)
+
+        results.append(ModelLimit(
+            model=model,
+            max_total_tokens=max_total,
+            current_total_tokens=current,
+            remaining_tokens=remaining,
+            usage_percent=pct,
+        ))
+    return results
+
+
+@app.get("/billing", response_model=BillingResponse)
+async def get_my_billing(
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """Full billing summary: usage, limits, and rate limit config."""
+    # Usage
+    usage_keys = await _scan_keys(redis, f"llmapi:usage:{user.user_id}:*")
+    usages = []
+    for key in usage_keys:
+        model = key.split(f"llmapi:usage:{user.user_id}:")[1]
+        data = await redis.hgetall(key)
+        prompt = int(data.get("prompt_tokens", 0))
+        completion = int(data.get("completion_tokens", 0))
+        usages.append(ModelUsage(
+            model=model,
+            prompt_tokens=prompt,
+            completion_tokens=completion,
+            total_tokens=prompt + completion,
+        ))
+
+    # Limits
+    limit_keys = await _scan_keys(redis, f"llmapi:limits:{user.user_id}:*")
+    all_models = set()
+    for key in limit_keys:
+        all_models.add(key.split(f"llmapi:limits:{user.user_id}:")[1])
+    for key in usage_keys:
+        all_models.add(key.split(f"llmapi:usage:{user.user_id}:")[1])
+
+    limits = []
+    for model in sorted(all_models):
+        lim_data = await redis.hgetall(f"llmapi:limits:{user.user_id}:{model}")
+        max_total = int(lim_data.get("max_total_tokens", 0))
+        usg_data = await redis.hgetall(f"llmapi:usage:{user.user_id}:{model}")
+        current = int(usg_data.get("prompt_tokens", 0)) + int(usg_data.get("completion_tokens", 0))
+        remaining = None
+        pct = None
+        if max_total > 0:
+            remaining = max(0, max_total - current)
+            pct = round(current / max_total * 100, 1)
+        limits.append(ModelLimit(
+            model=model,
+            max_total_tokens=max_total,
+            current_total_tokens=current,
+            remaining_tokens=remaining,
+            usage_percent=pct,
+        ))
+
+    # Rate limit
+    rate_config = await redis.hgetall(f"llmapi:ratelimit_config:{user.user_id}")
+    rpm = int(rate_config.get("requests_per_minute", 0))
+    rate_key = f"llmapi:ratelimit:{user.user_id}"
+    now_ms = int(time.time() * 1000)
+    await redis.zremrangebyscore(rate_key, 0, now_ms - 60_000)
+    current_rpm = await redis.zcard(rate_key)
+
+    from config import DEFAULT_RATE_LIMIT
+    rate_limit = {
+        "requests_per_minute": rpm if rpm else DEFAULT_RATE_LIMIT,
+        "current_requests_in_window": current_rpm,
+    }
+
+    return BillingResponse(
+        user_id=user.user_id,
+        name=user.name,
+        usage=usages,
+        limits=limits,
+        rate_limit=rate_limit,
+    )
 
 
 @app.post("/completion", response_model=CompletionResponse)

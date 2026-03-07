@@ -125,6 +125,56 @@ All admin endpoints require an admin API key:
 | `/admin/users/{user_id}/rate-limit` | PUT | Set rate limit (`{"requests_per_minute": N}`) |
 | `/admin/users/{user_id}/usage` | GET | Token usage per model |
 
+### Billing & Usage (Self-Service)
+
+Any authenticated user can view their own token consumption and limits:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/usage` | GET | Token usage across all models |
+| `/usage/{model}` | GET | Token usage for a specific model |
+| `/limits` | GET | Token limits with remaining budget and usage percentage |
+| `/billing` | GET | Full summary: usage, limits, and current rate limit status |
+
+```bash
+# View all usage
+curl -H "Authorization: Bearer llm-YOUR_KEY" http://localhost:8000/usage
+
+# View billing summary
+curl -H "Authorization: Bearer llm-YOUR_KEY" http://localhost:8000/billing
+```
+
+Response from `/billing`:
+```json
+{
+    "user_id": "abc123",
+    "name": "Alice",
+    "usage": [
+        {
+            "model": "default",
+            "prompt_tokens": 5000,
+            "completion_tokens": 3000,
+            "total_tokens": 8000
+        }
+    ],
+    "limits": [
+        {
+            "model": "default",
+            "max_total_tokens": 500000,
+            "current_total_tokens": 8000,
+            "remaining_tokens": 492000,
+            "usage_percent": 1.6
+        }
+    ],
+    "rate_limit": {
+        "requests_per_minute": 60,
+        "current_requests_in_window": 5
+    }
+}
+```
+
+Models with no token limit set show `remaining_tokens: null` and `usage_percent: null`.
+
 ### Disabling Auth
 
 Set `AUTH_ENABLED=false` to disable authentication (all requests treated as admin):

@@ -618,6 +618,60 @@
 			]
 		},
 		{
+			"name": "Billing & Usage",
+			"description": "Self-service endpoints for viewing your own token usage, limits, and billing summary. Available to all authenticated users.",
+			"item": [
+				{
+					"name": "Get My Usage (All Models)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/usage",
+							"host": ["{{baseUrl}}"],
+							"path": ["usage"]
+						},
+						"description": "View your own token usage across all models."
+					}
+				},
+				{
+					"name": "Get My Usage (Specific Model)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/usage/default",
+							"host": ["{{baseUrl}}"],
+							"path": ["usage", "default"]
+						},
+						"description": "View your own token usage for a specific model. Replace 'default' with MODEL_NAME if configured."
+					}
+				},
+				{
+					"name": "Get My Limits",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/limits",
+							"host": ["{{baseUrl}}"],
+							"path": ["limits"]
+						},
+						"description": "View your token limits and remaining budget across all models. Shows remaining_tokens and usage_percent (null if unlimited)."
+					}
+				},
+				{
+					"name": "Get My Billing Summary",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/billing",
+							"host": ["{{baseUrl}}"],
+							"path": ["billing"]
+						},
+						"description": "Full billing summary: usage per model, limits with remaining budget, and current rate limit status."
+					}
+				}
+			]
+		},
+		{
 			"name": "Admin",
 			"description": "User management, API key management, rate limits, token limits, and usage tracking. All endpoints require admin privileges.",
 			"item": [

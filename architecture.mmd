@@ -33,6 +33,13 @@ graph TB
                 JOBS["/jobs/{job_id}"]
             end
 
+            subgraph BillingEndpoints["Billing & Usage (self-service)"]
+                BILLING_USAGE["/usage<br/>all models"]
+                BILLING_USAGE_MODEL["/usage/{model}<br/>specific model"]
+                BILLING_LIMITS["/limits<br/>remaining budget"]
+                BILLING_FULL["/billing<br/>full summary"]
+            end
+
             subgraph AdminEndpoints["Admin Endpoints (admin.py)"]
                 USERS_CRUD["/admin/users<br/>CRUD"]
                 KEYS_MGMT["/admin/users/{id}/keys<br/>create / revoke"]
@@ -96,6 +103,9 @@ graph TB
     PROC_CHAT & PROC_COMP --> WORKER_USAGE
     WORKER_USAGE -->|"HINCRBY"| REDIS
 
+    BillingEndpoints -->|auth only| AuthLayer
+    BILLING_USAGE & BILLING_USAGE_MODEL & BILLING_LIMITS & BILLING_FULL -->|"SCAN + HGETALL<br/>llmapi:usage / llmapi:limits"| REDIS
+
     AdminEndpoints -->|require_admin| AuthLayer
     USERS_CRUD & KEYS_MGMT & LIMITS & RATE_CFG & USAGE --> REDIS
 
@@ -141,6 +151,7 @@ graph TB
     class GET_USER,RATE,TOKEN_CHK auth
     class USERS_CRUD,KEYS_MGMT,LIMITS,RATE_CFG,USAGE admin
     class COMP,CHAT,STREAM,QUERY,ANALYZE,RAG_EP,RAG_DOCS,RAG_SEARCH,COLLECTIONS,CHAT_ASYNC,COMP_ASYNC,JOBS,HEALTH endpoint
+    class BILLING_USAGE,BILLING_USAGE_MODEL,BILLING_LIMITS,BILLING_FULL endpoint
     class DO_CHAT,DO_COMP,DO_QUERY,LLM_POST,RECORD,PROC_CHAT,PROC_COMP,WORKER_USAGE internal
     class CFG_AUTH,CFG_MODEL,CFG_RATE,CFG_TOKEN,CFG_LLAMA,CFG_REDIS,CFG_SLOTS config
     class SEED seed
