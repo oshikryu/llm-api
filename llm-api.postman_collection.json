@@ -1,15 +1,40 @@
 {
 	"info": {
 		"name": "Local LLM API",
-		"description": "Example queries for the local llama-server API wrapper with RAG, async queuing, and streaming support.",
+		"description": "Example queries for the local llama-server API wrapper with RAG, async queuing, streaming support, and multi-user auth/rate-limiting.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
 		{
 			"key": "baseUrl",
 			"value": "http://localhost:8000"
+		},
+		{
+			"key": "apiKey",
+			"value": "llm-YOUR_API_KEY_HERE",
+			"description": "API key obtained from seed_admin.py or POST /admin/users/{id}/keys"
+		},
+		{
+			"key": "job_id",
+			"value": "",
+			"description": "Set automatically by async job submissions"
+		},
+		{
+			"key": "user_id",
+			"value": "",
+			"description": "Set automatically by Create User"
 		}
 	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{apiKey}}",
+				"type": "string"
+			}
+		]
+	},
 	"item": [
 		{
 			"name": "Health",
@@ -17,6 +42,9 @@
 				{
 					"name": "Health Check",
 					"request": {
+						"auth": {
+							"type": "noauth"
+						},
 						"method": "GET",
 						"url": {
 							"raw": "{{baseUrl}}/health",
@@ -476,6 +504,20 @@
 			"item": [
 				{
 					"name": "Submit Async Chat",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var data = pm.response.json();",
+									"    pm.collectionVariables.set('job_id', data.job_id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
 					"request": {
 						"method": "POST",
 						"url": {
@@ -497,6 +539,20 @@
 				},
 				{
 					"name": "Submit Async Completion",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    var data = pm.response.json();",
+									"    pm.collectionVariables.set('job_id', data.job_id);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
 					"request": {
 						"method": "POST",
 						"url": {
@@ -526,6 +582,235 @@
 							"path": ["jobs", "{{job_id}}"]
 						}
 					}
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"description": "User management, API key management, rate limits, token limits, and usage tracking. All endpoints require admin privileges.",
+			"item": [
+				{
+					"name": "Users",
+					"item": [
+						{
+							"name": "Create User",
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 200) {",
+											"    var data = pm.response.json();",
+											"    pm.collectionVariables.set('user_id', data.user_id);",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							],
+							"request": {
+								"method": "POST",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users"]
+								},
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Alice\",\n    \"is_admin\": false\n}"
+								}
+							}
+						},
+						{
+							"name": "Create Admin User",
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 200) {",
+											"    var data = pm.response.json();",
+											"    pm.collectionVariables.set('user_id', data.user_id);",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							],
+							"request": {
+								"method": "POST",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users"]
+								},
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"name\": \"Bob (Admin)\",\n    \"is_admin\": true\n}"
+								}
+							}
+						},
+						{
+							"name": "List Users",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users"]
+								}
+							}
+						},
+						{
+							"name": "Get User",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}"]
+								}
+							}
+						},
+						{
+							"name": "Delete User",
+							"request": {
+								"method": "DELETE",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}"]
+								}
+							}
+						}
+					]
+				},
+				{
+					"name": "API Keys",
+					"item": [
+						{
+							"name": "Create API Key",
+							"request": {
+								"method": "POST",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/keys",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}", "keys"]
+								}
+							}
+						},
+						{
+							"name": "Revoke API Key",
+							"request": {
+								"method": "DELETE",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/keys/llm-abcdefgh",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}", "keys", "llm-abcdefgh"]
+								},
+								"description": "Replace 'llm-abcdefgh' with the key_prefix returned from Create API Key."
+							}
+						}
+					]
+				},
+				{
+					"name": "Limits & Rate Limiting",
+					"item": [
+						{
+							"name": "Set Token Limit",
+							"request": {
+								"method": "PUT",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/limits/default",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}", "limits", "default"]
+								},
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"max_total_tokens\": 100000\n}"
+								},
+								"description": "Set to 0 to remove limit (unlimited). Replace 'default' with MODEL_NAME if configured."
+							}
+						},
+						{
+							"name": "Remove Token Limit",
+							"request": {
+								"method": "PUT",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/limits/default",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}", "limits", "default"]
+								},
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"max_total_tokens\": 0\n}"
+								}
+							}
+						},
+						{
+							"name": "Set Rate Limit",
+							"request": {
+								"method": "PUT",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/rate-limit",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}", "rate-limit"]
+								},
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"requests_per_minute\": 120\n}"
+								},
+								"description": "Default is 60 requests/minute (configured via DEFAULT_RATE_LIMIT env var)."
+							}
+						}
+					]
+				},
+				{
+					"name": "Usage",
+					"item": [
+						{
+							"name": "Get User Usage",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/usage",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{user_id}}", "usage"]
+								},
+								"description": "Returns per-model token usage breakdown (prompt_tokens, completion_tokens, total_tokens)."
+							}
+						}
+					]
 				}
 			]
 		}
