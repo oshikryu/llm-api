@@ -2,11 +2,14 @@
 
 import asyncio
 import hashlib
+import os
 import secrets
+import sys
 import time
 
 import redis.asyncio as aioredis
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import REDIS_URL
 
 SEED_USERS = [

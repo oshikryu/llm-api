@@ -85,7 +85,7 @@ The API supports multi-user API key authentication with per-user rate limiting a
 Seed initial users (admin + regular users with rate/token limits):
 
 ```bash
-python seed_admin.py
+python scripts/seed_admin.py
 ```
 
 This creates four users with API keys printed to stdout (save them — shown only once):
@@ -97,7 +97,7 @@ This creates four users with API keys printed to stdout (save them — shown onl
 | Bob | user | 30/min | 100,000 |
 | Carol (Power User) | user | 120/min | unlimited |
 
-Edit the `SEED_USERS` list in `seed_admin.py` to customize.
+Edit the `SEED_USERS` list in `scripts/seed_admin.py` to customize.
 
 ### Using API Keys
 
@@ -191,9 +191,9 @@ Simulate hundreds of requests per second across multiple users to validate rate 
 
 ```bash
 # Requires Redis running and API server up
-python load_test.py                            # gate mode (default): 200 rps, 5s
-python load_test.py --rps 1000 --duration 10   # 1000 rps gate stress test
-python load_test.py --mode llm --rps 20        # llm mode: real inference, lower rps
+python scripts/load_test.py                            # gate mode (default): 200 rps, 5s
+python scripts/load_test.py --rps 1000 --duration 10   # 1000 rps gate stress test
+python scripts/load_test.py --mode llm --rps 20        # llm mode: real inference, lower rps
 ```
 
 ### Modes
@@ -209,11 +209,11 @@ Use `gate` mode for high-RPS stress testing of auth and rate limiting without LL
 ### Options
 
 ```bash
-python load_test.py --rps 1000 --duration 10                  # 1000 rps gate stress
-python load_test.py --mode auth --rps 50                      # auth + minimal LLM
-python load_test.py --mode llm --rps 20 --duration 10         # LLM throughput test
-python load_test.py --base-url http://api-host:8000 --rps 300 # remote target
-python load_test.py --mode llm --timeout 180                  # custom timeout
+python scripts/load_test.py --rps 1000 --duration 10                  # 1000 rps gate stress
+python scripts/load_test.py --mode auth --rps 50                      # auth + minimal LLM
+python scripts/load_test.py --mode llm --rps 20 --duration 10         # LLM throughput test
+python scripts/load_test.py --base-url http://api-host:8000 --rps 300 # remote target
+python scripts/load_test.py --mode llm --timeout 180                  # custom timeout
 ```
 
 ### How It Works
@@ -228,7 +228,7 @@ python load_test.py --mode llm --timeout 180                  # custom timeout
 Progress goes to stderr; structured JSON results go to stdout (pipe-friendly):
 
 ```bash
-python load_test.py --rps 200 --duration 5 | jq .
+python scripts/load_test.py --rps 200 --duration 5 | jq .
 ```
 
 Output structure:
@@ -268,7 +268,7 @@ Output structure:
 
 Each entry in `users` includes full per-user breakdowns: success count, 429s (rate limited), 403s (token limit exceeded), errors, timeouts, and latency percentiles.
 
-See [`load_test.mmd`](load_test.mmd) for a visual diagram of the load test architecture.
+See [`diagrams/load_test.mmd`](diagrams/load_test.mmd) for a visual diagram of the load test architecture.
 
 ## Configuration
 

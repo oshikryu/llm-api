@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import secrets
 import sys
 import time
@@ -33,6 +34,7 @@ from dataclasses import dataclass, field
 import httpx
 import redis.asyncio as aioredis
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import REDIS_URL
 
 # ---------------------------------------------------------------------------

@@ -42,7 +42,27 @@
 		{
 			"key": "user_id",
 			"value": "",
-			"description": "Set automatically by Create User"
+			"description": "Set automatically by Create User or List Users"
+		},
+		{
+			"key": "userIdAdmin",
+			"value": "",
+			"description": "Admin user_id — set automatically by List Users"
+		},
+		{
+			"key": "userIdAlice",
+			"value": "",
+			"description": "Alice user_id — set automatically by List Users"
+		},
+		{
+			"key": "userIdBob",
+			"value": "",
+			"description": "Bob user_id — set automatically by List Users"
+		},
+		{
+			"key": "userIdCarol",
+			"value": "",
+			"description": "Carol user_id — set automatically by List Users"
 		}
 	],
 	"auth": {
@@ -668,6 +688,72 @@
 						},
 						"description": "Full billing summary: usage per model, limits with remaining budget, and current rate limit status."
 					}
+				},
+				{
+					"name": "Billing as Alice",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{apiKeyAlice}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/billing",
+							"host": ["{{baseUrl}}"],
+							"path": ["billing"]
+						},
+						"description": "Alice's billing summary (60 rpm, 500k token limit)."
+					}
+				},
+				{
+					"name": "Billing as Bob",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{apiKeyBob}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/billing",
+							"host": ["{{baseUrl}}"],
+							"path": ["billing"]
+						},
+						"description": "Bob's billing summary (30 rpm, 100k token limit)."
+					}
+				},
+				{
+					"name": "Billing as Carol",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": [
+								{
+									"key": "token",
+									"value": "{{apiKeyCarol}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/billing",
+							"host": ["{{baseUrl}}"],
+							"path": ["billing"]
+						},
+						"description": "Carol's billing summary (120 rpm, unlimited tokens)."
+					}
 				}
 			]
 		},
@@ -750,17 +836,47 @@
 						},
 						{
 							"name": "List Users",
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"if (pm.response.code === 200) {",
+											"    var users = pm.response.json();",
+											"    var nameMap = {",
+											"        'Admin': 'userIdAdmin',",
+											"        'Alice': 'userIdAlice',",
+											"        'Bob': 'userIdBob',",
+											"        'Carol (Power User)': 'userIdCarol'",
+											"    };",
+											"    users.forEach(function(u) {",
+											"        var varName = nameMap[u.name];",
+											"        if (varName) {",
+											"            pm.collectionVariables.set(varName, u.user_id);",
+											"            console.log('Set ' + varName + ' = ' + u.user_id);",
+											"        }",
+											"    });",
+											"    if (users.length > 0) {",
+											"        pm.collectionVariables.set('user_id', users[0].user_id);",
+											"    }",
+											"}"
+										],
+										"type": "text/javascript"
+									}
+								}
+							],
 							"request": {
 								"method": "GET",
 								"url": {
 									"raw": "{{baseUrl}}/admin/users",
 									"host": ["{{baseUrl}}"],
 									"path": ["admin", "users"]
-								}
+								},
+								"description": "Lists all users. Test script auto-populates userIdAdmin, userIdAlice, userIdBob, userIdCarol variables."
 							}
 						},
 						{
-							"name": "Get User",
+							"name": "Get User (by user_id)",
 							"request": {
 								"method": "GET",
 								"url": {
@@ -768,6 +884,42 @@
 									"host": ["{{baseUrl}}"],
 									"path": ["admin", "users", "{{user_id}}"]
 								}
+							}
+						},
+						{
+							"name": "Get Alice",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdAlice}}",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdAlice}}"]
+								},
+								"description": "Requires running List Users first to populate userIdAlice."
+							}
+						},
+						{
+							"name": "Get Bob",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdBob}}",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdBob}}"]
+								},
+								"description": "Requires running List Users first to populate userIdBob."
+							}
+						},
+						{
+							"name": "Get Carol",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdCarol}}",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdCarol}}"]
+								},
+								"description": "Requires running List Users first to populate userIdCarol."
 							}
 						},
 						{
@@ -815,7 +967,29 @@
 					"name": "Limits & Rate Limiting",
 					"item": [
 						{
-							"name": "Set Token Limit",
+							"name": "Set Alice Token Limit",
+							"request": {
+								"method": "PUT",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdAlice}}/limits/default",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdAlice}}", "limits", "default"]
+								},
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"max_total_tokens\": 500000\n}"
+								},
+								"description": "Requires running List Users first to populate userIdAlice."
+							}
+						},
+						{
+							"name": "Set Token Limit (by user_id)",
 							"request": {
 								"method": "PUT",
 								"url": {
@@ -885,7 +1059,7 @@
 					"name": "Usage",
 					"item": [
 						{
-							"name": "Get User Usage",
+							"name": "Get User Usage (by user_id)",
 							"request": {
 								"method": "GET",
 								"url": {
@@ -894,6 +1068,42 @@
 									"path": ["admin", "users", "{{user_id}}", "usage"]
 								},
 								"description": "Returns per-model token usage breakdown (prompt_tokens, completion_tokens, total_tokens)."
+							}
+						},
+						{
+							"name": "Get Alice Usage",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdAlice}}/usage",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdAlice}}", "usage"]
+								},
+								"description": "Requires running List Users first to populate userIdAlice."
+							}
+						},
+						{
+							"name": "Get Bob Usage",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdBob}}/usage",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdBob}}", "usage"]
+								},
+								"description": "Requires running List Users first to populate userIdBob."
+							}
+						},
+						{
+							"name": "Get Carol Usage",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{userIdCarol}}/usage",
+									"host": ["{{baseUrl}}"],
+									"path": ["admin", "users", "{{userIdCarol}}", "usage"]
+								},
+								"description": "Requires running List Users first to populate userIdCarol."
 							}
 						}
 					]
