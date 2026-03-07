@@ -19,7 +19,7 @@ import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Optional, AsyncGenerator
+from typing import Any, Optional, AsyncGenerator
 
 from config import (
     AUTH_ENABLED,
@@ -98,7 +98,10 @@ class CompletionRequest(BaseModel):
 
 class ChatMessage(BaseModel):
     role: str = Field(..., description="Role: 'system', 'user', or 'assistant'")
-    content: str = Field(..., description="Message content")
+    # str: plain text, e.g. "Hello"
+    # list: OpenAI multimodal format, e.g.
+    #   [{"type": "text", "text": "..."}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}]
+    content: Any = Field(..., description="Message content (string or multimodal content parts)")
 
 
 class ChatRequest(BaseModel):
