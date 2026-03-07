@@ -1,8 +1,10 @@
 # Local LLM API
 
-API wrapper for querying a local llama-server instance.
+API wrapper for querying a local llama-server instance, with connection pooling, concurrency control, async job queuing, and Docker-based multi-instance scaling.
 
 ## Setup
+
+### Local Development
 
 1. Start the llama-server:
 ```bash
@@ -11,6 +13,18 @@ llama-server \
   --port 8080 \
   -ngl 99 \
   --ctx-size 8192 \
+  --batch-size 512 \
+  --ubatch-size 128
+```
+
+When running moondream:
+```bash
+ llama-server \
+  -m moondream2-text-model-f16.gguf \
+  --mmproj moondream2-mmproj-f16.gguf \
+  --port 8080 \
+  -ngl 99 \
+  --ctx-size 2048 \
   --batch-size 512 \
   --ubatch-size 128
 ```
@@ -25,6 +39,46 @@ pip install -r requirements.txt
 ```bash
 uvicorn api:app --reload --port 8000
 ```
+
+### Docker (Multi-Instance)
+
+Launch the full stack with two llama-server instances, nginx load balancer, Redis, the API, and a queue worker:
+
+```bash
+docker-compose up --build
+```
+
+This starts:
+- **llama-server-1 / llama-server-2** — two llama.cpp inference backends
+- **nginx** — `least_conn` load balancer fronting both servers on port 8080
+- **redis** — backing store for the async job queue
+- **api** — FastAPI application on port 8000 (4 gunicorn/uvicorn workers)
+- **worker** — arq queue worker for async job processing
+
+Place your model file in the `models` Docker volume before starting.
+
+## Configuration
+
+All settings are controlled via environment variables (see `config.py`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLAMA_SERVER_URL` | `http://localhost:8080` | Base URL of llama-server (or nginx LB) |
+| `LLAMA_PARALLEL_SLOTS` | `4` | Max concurrent LLM requests (semaphore limit) |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection for async queue |
+| `REQUEST_TIMEOUT` | `120` | Default request timeout (seconds) |
+| `STREAM_TIMEOUT` | `600` | Timeout for streaming requests (seconds) |
+
+## Architecture
+
+### Connection Pooling
+A single shared `httpx.AsyncClient` is created at startup with configurable connection pool limits, eliminating the overhead of creating a new HTTP client per request.
+
+### Concurrency Control
+An `asyncio.Semaphore` (sized to `LLAMA_PARALLEL_SLOTS`) gates all LLM requests. This prevents overloading the llama-server beyond its slot capacity. Streaming requests hold the semaphore for their full duration.
+
+### Async Job Queue
+For high-throughput scenarios, requests can be submitted to a Redis-backed queue (via arq) and polled for results. This decouples request acceptance from processing and enables horizontal scaling of workers.
 
 ## Endpoints
 
@@ -60,6 +114,53 @@ POST /chat
 ```
 
 Set `continue_until_done: true` to keep generating until the model finishes naturally, instead of stopping at `max_tokens`.
+
+### Streaming Chat
+```
+POST /chat/stream
+```
+Same request body as `/chat`. Returns a `text/plain` stream of generated tokens.
+
+### Async Job Submission
+
+Submit a job to the Redis queue and poll for results:
+
+```
+POST /chat/async
+{
+    "messages": [{"role": "user", "content": "Hello"}]
+}
+```
+
+Response:
+```json
+{"job_id": "abc-123", "status": "queued"}
+```
+
+```
+POST /completion/async
+{
+    "prompt": "Your prompt here"
+}
+```
+
+Poll status:
+```
+GET /jobs/{job_id}
+```
+
+Response (when complete):
+```json
+{
+    "job_id": "abc-123",
+    "status": "complete",
+    "result": {
+        "message": {"role": "assistant", "content": "..."},
+        "tokens_generated": 42,
+        "tokens_prompt": 10
+    }
+}
+```
 
 ### RAG (Retrieval-Augmented Generation)
 
@@ -172,6 +273,14 @@ python client.py --chat --no-continue "Quick question"  # Stop at max_tokens
 python client.py --max-tokens 1024 "Your prompt"
 python client.py --health
 ```
+
+## Testing
+
+```bash
+pytest tests/ -v
+```
+
+Tests mock the shared `http_client` and `llm_semaphore` — no running llama-server or Redis required.
 
 ## API Documentation
 

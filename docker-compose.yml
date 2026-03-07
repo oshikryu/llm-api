@@ -1,0 +1,81 @@
+services:
+  llama-server-1:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    volumes:
+      - models:/models
+    command: >
+      --model /models/model.gguf
+      --port 8080
+      --host 0.0.0.0
+      --ctx-size 8192
+      --n-predict 512
+      --parallel 4
+      --n-gpu-layers 99
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  llama-server-2:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    volumes:
+      - models:/models
+    command: >
+      --model /models/model.gguf
+      --port 8080
+      --host 0.0.0.0
+      --ctx-size 8192
+      --n-predict 512
+      --parallel 4
+      --n-gpu-layers 99
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - llama-server-1
+      - llama-server-2
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - LLAMA_SERVER_URL=http://nginx:8080
+      - LLAMA_PARALLEL_SLOTS=8
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - nginx
+      - redis
+
+  worker:
+    build: .
+    command: ["arq", "queue_worker.WorkerSettings"]
+    environment:
+      - LLAMA_SERVER_URL=http://nginx:8080
+      - LLAMA_PARALLEL_SLOTS=8
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - nginx
+      - redis
+
+volumes:
+  models:

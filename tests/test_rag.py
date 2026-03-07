@@ -1,5 +1,6 @@
 """Tests for rag/router.py endpoints."""
 
+import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
@@ -14,13 +15,15 @@ def client():
     return TestClient(app)
 
 
-def _mock_httpx_for_rag(mock_httpx_cls, chat_response):
-    """Set up httpx AsyncClient mock so the RAG endpoint can call the LLM."""
+@pytest.fixture()
+def mock_httpx():
+    """Mock the shared http_client and llm_semaphore in api module."""
     mock_client = AsyncMock()
-    mock_httpx_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-    mock_httpx_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-    mock_client.post.return_value = chat_response
-    return mock_client
+    with (
+        patch("api.http_client", mock_client),
+        patch("api.llm_semaphore", asyncio.Semaphore(4)),
+    ):
+        yield mock_client
 
 
 # ---------------------------------------------------------------------------
@@ -197,21 +200,17 @@ class TestSearch:
 
 class TestRAG:
     @patch("rag.router.vectorstore")
-    @patch("api.httpx.AsyncClient")
-    def test_basic_rag(self, mock_httpx_cls, mock_vs, client):
+    def test_basic_rag(self, mock_vs, mock_httpx, client):
         mock_vs.query_collection.return_value = {
             "ids": [["c1"]],
             "documents": [["The O-1A visa requires extraordinary ability."]],
             "metadatas": [[{"source": "guide"}]],
             "distances": [[0.15]],
         }
-        _mock_httpx_for_rag(
-            mock_httpx_cls,
-            make_chat_response(
-                content="Based on the context, the O-1A visa requires extraordinary ability.",
-                completion_tokens=20,
-                prompt_tokens=50,
-            ),
+        mock_httpx.post.return_value = make_chat_response(
+            content="Based on the context, the O-1A visa requires extraordinary ability.",
+            completion_tokens=20,
+            prompt_tokens=50,
         )
 
         resp = client.post(
@@ -230,15 +229,14 @@ class TestRAG:
         assert data["sources"][0]["chunk_id"] == "c1"
 
     @patch("rag.router.vectorstore")
-    @patch("api.httpx.AsyncClient")
-    def test_rag_without_sources(self, mock_httpx_cls, mock_vs, client):
+    def test_rag_without_sources(self, mock_vs, mock_httpx, client):
         mock_vs.query_collection.return_value = {
             "ids": [["c1"]],
             "documents": [["Some context."]],
             "metadatas": [[{}]],
             "distances": [[0.2]],
         }
-        _mock_httpx_for_rag(mock_httpx_cls, make_chat_response(content="Answer."))
+        mock_httpx.post.return_value = make_chat_response(content="Answer.")
 
         resp = client.post(
             "/rag",
@@ -260,17 +258,14 @@ class TestRAG:
         assert resp.status_code == 404
 
     @patch("rag.router.vectorstore")
-    @patch("api.httpx.AsyncClient")
-    def test_rag_custom_system_prompt(self, mock_httpx_cls, mock_vs, client):
+    def test_rag_custom_system_prompt(self, mock_vs, mock_httpx, client):
         mock_vs.query_collection.return_value = {
             "ids": [["c1"]],
             "documents": [["Context text."]],
             "metadatas": [[{}]],
             "distances": [[0.1]],
         }
-        mock_client = _mock_httpx_for_rag(
-            mock_httpx_cls, make_chat_response(content="Custom.")
-        )
+        mock_httpx.post.return_value = make_chat_response(content="Custom.")
 
         resp = client.post(
             "/rag",
@@ -283,7 +278,7 @@ class TestRAG:
         )
         assert resp.status_code == 200
         # Verify the custom system prompt was sent to the LLM
-        call_payload = mock_client.post.call_args[1]["json"]
+        call_payload = mock_httpx.post.call_args[1]["json"]
         assert call_payload["messages"][0]["content"] == "Answer like a pirate."
 
 

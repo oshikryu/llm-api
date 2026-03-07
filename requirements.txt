@@ -4,3 +4,5 @@ httpx>=0.26.0
 pydantic>=2.5.0
 sentence-transformers>=2.2.0
 chromadb>=0.4.22
+redis>=5.0.0
+arq>=0.26.0

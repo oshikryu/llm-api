@@ -8,23 +8,63 @@ Then run this API:
     uvicorn api:app --reload --port 8000
 """
 
+import asyncio
 import json
+import uuid
+from contextlib import asynccontextmanager
+
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, AsyncGenerator
 
+from config import (
+    LLAMA_SERVER_URL,
+    LLAMA_PARALLEL_SLOTS,
+    REDIS_URL,
+    REQUEST_TIMEOUT,
+    STREAM_TIMEOUT,
+)
 from rag import rag_router
+
+http_client: httpx.AsyncClient | None = None
+llm_semaphore: asyncio.Semaphore | None = None
+arq_pool = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global http_client, llm_semaphore, arq_pool
+    http_client = httpx.AsyncClient(
+        base_url=LLAMA_SERVER_URL,
+        limits=httpx.Limits(
+            max_connections=LLAMA_PARALLEL_SLOTS * 2,
+            max_keepalive_connections=LLAMA_PARALLEL_SLOTS,
+        ),
+        timeout=httpx.Timeout(REQUEST_TIMEOUT, connect=10.0),
+    )
+    llm_semaphore = asyncio.Semaphore(LLAMA_PARALLEL_SLOTS)
+    try:
+        from arq import create_pool
+        from arq.connections import RedisSettings
+
+        arq_pool = await create_pool(RedisSettings.from_dsn(REDIS_URL))
+    except Exception:
+        arq_pool = None
+    yield
+    await http_client.aclose()
+    if arq_pool is not None:
+        await arq_pool.aclose()
+
 
 app = FastAPI(
     title="Local LLM API",
     description="API for querying local llama-server",
     version="1.0.0",
+    lifespan=lifespan,
 )
 app.include_router(rag_router, tags=["RAG"])
-
-LLAMA_SERVER_URL = "http://localhost:8080"
 
 
 class CompletionRequest(BaseModel):
@@ -61,13 +101,23 @@ class ChatResponse(BaseModel):
     tokens_prompt: int
 
 
+async def _llm_post(path: str, *, json: dict, timeout: float = REQUEST_TIMEOUT):
+    """POST to llama-server with semaphore-gated concurrency."""
+    async with llm_semaphore:
+        return await http_client.post(path, json=json, timeout=timeout)
+
+
+async def _llm_stream(path: str, *, json: dict, timeout: float = STREAM_TIMEOUT):
+    """Stream from llama-server, holding semaphore for the full duration."""
+    return http_client.stream("POST", path, json=json, timeout=timeout)
+
+
 @app.get("/health")
 async def health_check():
     """Check if both this API and llama-server are running."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(f"{LLAMA_SERVER_URL}/health")
-            llama_status = response.json() if response.status_code == 200 else {"status": "error"}
+        response = await http_client.get("/health", timeout=5.0)
+        llama_status = response.json() if response.status_code == 200 else {"status": "error"}
     except Exception as e:
         llama_status = {"status": "unreachable", "error": str(e)}
 
@@ -90,19 +140,15 @@ async def create_completion(request: CompletionRequest):
         payload["stop"] = request.stop
 
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(
-                f"{LLAMA_SERVER_URL}/completion",
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
+        response = await _llm_post("/completion", json=payload)
+        response.raise_for_status()
+        data = response.json()
 
-            return CompletionResponse(
-                text=data.get("content", ""),
-                tokens_generated=data.get("tokens_predicted", 0),
-                tokens_prompt=data.get("tokens_evaluated", 0),
-            )
+        return CompletionResponse(
+            text=data.get("content", ""),
+            tokens_generated=data.get("tokens_predicted", 0),
+            tokens_prompt=data.get("tokens_evaluated", 0),
+        )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="LLM request timed out")
     except httpx.HTTPStatusError as e:
@@ -136,60 +182,58 @@ async def create_chat_completion(request: ChatRequest):
     total_prompt_tokens = 0
     max_continuations = 25  # Safety limit
 
-    timeout = 600.0 if request.continue_until_done else 120.0
+    timeout = STREAM_TIMEOUT if request.continue_until_done else REQUEST_TIMEOUT
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            for iteration in range(max_continuations):
-                payload = {
-                    "messages": messages,
-                    "max_tokens": request.max_tokens,
-                    "temperature": request.temperature,
-                    "top_p": request.top_p,
-                }
-                if request.stop:
-                    payload["stop"] = request.stop
+        for iteration in range(max_continuations):
+            payload = {
+                "messages": messages,
+                "max_tokens": request.max_tokens,
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+            }
+            if request.stop:
+                payload["stop"] = request.stop
 
-                response = await client.post(
-                    f"{LLAMA_SERVER_URL}/v1/chat/completions",
-                    json=payload,
-                )
-                response.raise_for_status()
-                data = response.json()
-
-                choice = data.get("choices", [{}])[0]
-                message = choice.get("message", {})
-                usage = data.get("usage", {})
-                finish_reason = choice.get("finish_reason", "stop")
-
-                content = message.get("content", "")
-                tokens_generated = usage.get("completion_tokens", 0)
-                full_content += content
-                total_completion_tokens += tokens_generated
-                if iteration == 0:
-                    total_prompt_tokens = usage.get("prompt_tokens", 0)
-
-                # Stop conditions
-                if not request.continue_until_done:
-                    break
-                if finish_reason == "stop":
-                    break
-                if _looks_complete(content, tokens_generated, request.max_tokens):
-                    break
-                # Empty or very short response means model is done
-                if len(content.strip()) < 10:
-                    break
-
-                # Append assistant response - model will continue from here
-                messages.append({"role": "assistant", "content": content})
-
-            return ChatResponse(
-                message=ChatMessage(
-                    role="assistant",
-                    content=full_content,
-                ),
-                tokens_generated=total_completion_tokens,
-                tokens_prompt=total_prompt_tokens,
+            response = await _llm_post(
+                "/v1/chat/completions", json=payload, timeout=timeout
             )
+            response.raise_for_status()
+            data = response.json()
+
+            choice = data.get("choices", [{}])[0]
+            message = choice.get("message", {})
+            usage = data.get("usage", {})
+            finish_reason = choice.get("finish_reason", "stop")
+
+            content = message.get("content", "")
+            tokens_generated = usage.get("completion_tokens", 0)
+            full_content += content
+            total_completion_tokens += tokens_generated
+            if iteration == 0:
+                total_prompt_tokens = usage.get("prompt_tokens", 0)
+
+            # Stop conditions
+            if not request.continue_until_done:
+                break
+            if finish_reason == "stop":
+                break
+            if _looks_complete(content, tokens_generated, request.max_tokens):
+                break
+            # Empty or very short response means model is done
+            if len(content.strip()) < 10:
+                break
+
+            # Append assistant response - model will continue from here
+            messages.append({"role": "assistant", "content": content})
+
+        return ChatResponse(
+            message=ChatMessage(
+                role="assistant",
+                content=full_content,
+            ),
+            tokens_generated=total_completion_tokens,
+            tokens_prompt=total_prompt_tokens,
+        )
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="LLM request timed out")
     except httpx.HTTPStatusError as e:
@@ -206,26 +250,27 @@ async def create_chat_completion_stream(request: ChatRequest):
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
         max_continuations = 25
 
-        async with httpx.AsyncClient(timeout=600.0) as client:
-            for iteration in range(max_continuations):
-                payload = {
-                    "messages": messages,
-                    "max_tokens": request.max_tokens,
-                    "temperature": request.temperature,
-                    "top_p": request.top_p,
-                    "stream": True,
-                }
-                if request.stop:
-                    payload["stop"] = request.stop
+        for iteration in range(max_continuations):
+            payload = {
+                "messages": messages,
+                "max_tokens": request.max_tokens,
+                "temperature": request.temperature,
+                "top_p": request.top_p,
+                "stream": True,
+            }
+            if request.stop:
+                payload["stop"] = request.stop
 
-                content_chunk = ""
-                finish_reason = None
-                tokens_generated = 0
+            content_chunk = ""
+            finish_reason = None
+            tokens_generated = 0
 
-                async with client.stream(
+            async with llm_semaphore:
+                async with http_client.stream(
                     "POST",
-                    f"{LLAMA_SERVER_URL}/v1/chat/completions",
+                    "/v1/chat/completions",
                     json=payload,
+                    timeout=STREAM_TIMEOUT,
                 ) as response:
                     async for line in response.aiter_lines():
                         if not line.startswith("data: "):
@@ -248,18 +293,18 @@ async def create_chat_completion_stream(request: ChatRequest):
                         except json.JSONDecodeError:
                             continue
 
-                # Stop conditions
-                if not request.continue_until_done:
-                    break
-                if finish_reason == "stop":
-                    break
-                if _looks_complete(content_chunk, tokens_generated, request.max_tokens):
-                    break
-                if len(content_chunk.strip()) < 10:
-                    break
+            # Stop conditions
+            if not request.continue_until_done:
+                break
+            if finish_reason == "stop":
+                break
+            if _looks_complete(content_chunk, tokens_generated, request.max_tokens):
+                break
+            if len(content_chunk.strip()) < 10:
+                break
 
-                # Append for next iteration
-                messages.append({"role": "assistant", "content": content_chunk})
+            # Append for next iteration
+            messages.append({"role": "assistant", "content": content_chunk})
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -401,6 +446,63 @@ async def analyze_text(prompt: str, context: Optional[str] = None):
 
     request = CompletionRequest(prompt=full_prompt, max_tokens=512, temperature=0.3)
     return await create_completion(request)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Async job endpoints (Redis + arq)
+# ---------------------------------------------------------------------------
+
+
+class AsyncJobResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    result: Optional[dict] = None
+
+
+@app.post("/chat/async", response_model=AsyncJobResponse)
+async def create_chat_completion_async(request: ChatRequest):
+    """Enqueue a chat completion job for async processing."""
+    if arq_pool is None:
+        raise HTTPException(status_code=503, detail="Queue not available (Redis not connected)")
+    job_id = str(uuid.uuid4())
+    request_data = request.model_dump()
+    await arq_pool.enqueue_job("process_chat_completion", request_data, _job_id=job_id)
+    return AsyncJobResponse(job_id=job_id, status="queued")
+
+
+@app.post("/completion/async", response_model=AsyncJobResponse)
+async def create_completion_async(request: CompletionRequest):
+    """Enqueue a completion job for async processing."""
+    if arq_pool is None:
+        raise HTTPException(status_code=503, detail="Queue not available (Redis not connected)")
+    job_id = str(uuid.uuid4())
+    request_data = request.model_dump()
+    await arq_pool.enqueue_job("process_completion", request_data, _job_id=job_id)
+    return AsyncJobResponse(job_id=job_id, status="queued")
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    """Poll the status of an async job."""
+    if arq_pool is None:
+        raise HTTPException(status_code=503, detail="Queue not available (Redis not connected)")
+    from arq.jobs import Job
+
+    job = Job(job_id, arq_pool)
+    info = await job.info()
+    if info is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    status = info.status
+    result = None
+    if status == "complete":
+        result = info.result
+    return JobStatusResponse(job_id=job_id, status=status, result=result)
 
 
 if __name__ == "__main__":

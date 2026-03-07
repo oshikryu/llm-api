@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
@@ -5,11 +7,12 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture()
 def mock_httpx():
-    """Mock httpx.AsyncClient to avoid real calls to llama-server."""
-    with patch("api.httpx.AsyncClient") as mock_cls:
-        mock_client = AsyncMock()
-        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+    """Mock the shared http_client and llm_semaphore in api module."""
+    mock_client = AsyncMock()
+    with (
+        patch("api.http_client", mock_client),
+        patch("api.llm_semaphore", asyncio.Semaphore(4)),
+    ):
         yield mock_client
 
 
