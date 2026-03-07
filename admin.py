@@ -7,7 +7,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from auth import User, get_current_user, get_redis, require_admin
+from auth import User, get_current_user, get_redis, require_admin, get_rate_limit_config
 
 router = APIRouter(prefix="/admin")
 
@@ -21,11 +21,18 @@ class CreateUserResponse(BaseModel):
     user_id: str
 
 
+class RateLimitInfo(BaseModel):
+    requests_per_minute: int
+    requests_per_hour: int   # 0 = unlimited
+    requests_per_day: int    # 0 = unlimited
+
+
 class UserInfo(BaseModel):
     user_id: str
     name: str
     is_admin: bool
     created_at: str
+    rate_limits: RateLimitInfo | None = None
 
 
 class CreateKeyResponse(BaseModel):
@@ -38,7 +45,9 @@ class SetTokenLimitRequest(BaseModel):
 
 
 class SetRateLimitRequest(BaseModel):
-    requests_per_minute: int = Field(..., ge=1)
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_hour: int | None = Field(default=None, ge=0)    # 0 = remove limit
+    requests_per_day: int | None = Field(default=None, ge=0)     # 0 = remove limit
 
 
 class UsageInfo(BaseModel):
@@ -82,11 +91,13 @@ async def list_users(
                 continue
             uid = key.split("llmapi:user:")[1]
             data = await redis.hgetall(key)
+            rl_config = await get_rate_limit_config(uid, redis)
             users.append(UserInfo(
                 user_id=uid,
                 name=data.get("name", ""),
                 is_admin=data.get("is_admin", "false") == "true",
                 created_at=data.get("created_at", ""),
+                rate_limits=RateLimitInfo(**rl_config),
             ))
         if cursor == "0" or cursor == 0:
             break
@@ -103,11 +114,13 @@ async def get_user(
     data = await redis.hgetall(f"llmapi:user:{user_id}")
     if not data:
         raise HTTPException(status_code=404, detail="User not found")
+    rl_config = await get_rate_limit_config(user_id, redis)
     return UserInfo(
         user_id=user_id,
         name=data.get("name", ""),
         is_admin=data.get("is_admin", "false") == "true",
         created_at=data.get("created_at", ""),
+        rate_limits=RateLimitInfo(**rl_config),
     )
 
 
@@ -240,10 +253,17 @@ async def set_rate_limit(
     if not exists:
         raise HTTPException(status_code=404, detail="User not found")
 
-    await redis.hset(
-        f"llmapi:ratelimit_config:{user_id}",
-        mapping={"requests_per_minute": str(request.requests_per_minute)},
-    )
+    config_key = f"llmapi:ratelimit_config:{user_id}"
+    if request.requests_per_minute is not None:
+        await redis.hset(config_key, "requests_per_minute", str(request.requests_per_minute))
+    for field in ("requests_per_hour", "requests_per_day"):
+        value = getattr(request, field)
+        if value is None:
+            continue
+        if value == 0:
+            await redis.hdel(config_key, field)
+        else:
+            await redis.hset(config_key, field, str(value))
     return {"message": "Rate limit updated"}
 
 

@@ -19,6 +19,7 @@ def mock_redis():
     mock_r.hgetall.return_value = {}
     mock_r.get.return_value = None
     mock_r.zcard.return_value = 0
+    mock_r.zcount.return_value = 0
     mock_r.hincrby.return_value = 0
     from api import app
     app.state.redis = mock_r

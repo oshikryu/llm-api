@@ -14,7 +14,7 @@ graph TB
 
             subgraph AuthLayer["Auth Middleware (auth.py)"]
                 GET_USER["get_current_user()<br/>SHA-256 key lookup"]
-                RATE["check_rate_limit()<br/>sliding window 60s"]
+                RATE["check_rate_limit()<br/>multi-tier: min/hr/day"]
                 TOKEN_CHK["check_token_limit()<br/>per-user per-model"]
             end
 
@@ -44,7 +44,7 @@ graph TB
                 USERS_CRUD["/admin/users<br/>CRUD"]
                 KEYS_MGMT["/admin/users/{id}/keys<br/>create / revoke"]
                 LIMITS["/admin/users/{id}/limits/{model}<br/>set token cap"]
-                RATE_CFG["/admin/users/{id}/rate-limit<br/>set RPM"]
+                RATE_CFG["/admin/users/{id}/rate-limit<br/>set min/hr/day"]
                 USAGE["/admin/users/{id}/usage<br/>view stats"]
             end
 
@@ -74,7 +74,7 @@ graph TB
 
     %% Request flow
     GET_USER -->|"lookup llmapi:apikey:{hash}"| REDIS
-    RATE -->|"ZREMRANGEBYSCORE / ZCARD / ZADD<br/>llmapi:ratelimit:{user}"| REDIS
+    RATE -->|"ZREMRANGEBYSCORE / ZCOUNT / ZADD<br/>llmapi:ratelimit:{user}"| REDIS
     TOKEN_CHK -->|"HGETALL<br/>llmapi:limits / llmapi:usage"| REDIS
 
     Endpoints -->|auth + rate + token| AuthLayer
@@ -119,6 +119,8 @@ graph TB
         CFG_AUTH["AUTH_ENABLED"]
         CFG_MODEL["MODEL_NAME"]
         CFG_RATE["DEFAULT_RATE_LIMIT"]
+        CFG_RATE_HR["DEFAULT_RATE_LIMIT_HOUR"]
+        CFG_RATE_DAY["DEFAULT_RATE_LIMIT_DAY"]
         CFG_TOKEN["DEFAULT_TOKEN_LIMIT"]
         CFG_LLAMA["LLAMA_SERVER_URL"]
         CFG_REDIS["REDIS_URL"]
@@ -132,8 +134,8 @@ graph TB
         K3["llmapi:user:{id}:keys<br/>Set: hash:prefix pairs"]
         K4["llmapi:usage:{id}:{model}<br/>Hash: prompt_tokens, completion_tokens"]
         K5["llmapi:limits:{id}:{model}<br/>Hash: max_total_tokens"]
-        K6["llmapi:ratelimit:{id}<br/>Sorted Set: timestamps"]
-        K7["llmapi:ratelimit_config:{id}<br/>Hash: requests_per_minute"]
+        K6["llmapi:ratelimit:{id}<br/>Sorted Set: timestamps (24h TTL)"]
+        K7["llmapi:ratelimit_config:{id}<br/>Hash: requests_per_minute,<br/>requests_per_hour, requests_per_day"]
     end
 
     %% Styling
@@ -153,5 +155,5 @@ graph TB
     class COMP,CHAT,STREAM,QUERY,ANALYZE,RAG_EP,RAG_DOCS,RAG_SEARCH,COLLECTIONS,CHAT_ASYNC,COMP_ASYNC,JOBS,HEALTH endpoint
     class BILLING_USAGE,BILLING_USAGE_MODEL,BILLING_LIMITS,BILLING_FULL endpoint
     class DO_CHAT,DO_COMP,DO_QUERY,LLM_POST,RECORD,PROC_CHAT,PROC_COMP,WORKER_USAGE internal
-    class CFG_AUTH,CFG_MODEL,CFG_RATE,CFG_TOKEN,CFG_LLAMA,CFG_REDIS,CFG_SLOTS config
+    class CFG_AUTH,CFG_MODEL,CFG_RATE,CFG_RATE_HR,CFG_RATE_DAY,CFG_TOKEN,CFG_LLAMA,CFG_REDIS,CFG_SLOTS config
     class SEED seed

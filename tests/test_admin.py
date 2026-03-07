@@ -14,6 +14,7 @@ def mock_redis():
     mock_r.hgetall.return_value = {}
     mock_r.get.return_value = None
     mock_r.zcard.return_value = 0
+    mock_r.zcount.return_value = 0
     mock_r.hincrby.return_value = 0
     mock_r.exists.return_value = True
     mock_r.smembers.return_value = set()
@@ -57,16 +58,20 @@ class TestCreateUser:
 class TestListUsers:
     def test_list_users(self, client, mock_redis):
         mock_redis.scan.return_value = ("0", ["llmapi:user:abc123"])
-        mock_redis.hgetall.return_value = {
-            "name": "Alice",
-            "is_admin": "false",
-            "created_at": "1700000000",
-        }
+        mock_redis.hgetall.side_effect = [
+            # First call: user data
+            {"name": "Alice", "is_admin": "false", "created_at": "1700000000"},
+            # Second call: rate limit config
+            {"requests_per_minute": "60", "requests_per_hour": "500"},
+        ]
         resp = client.get("/admin/users")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
         assert data[0]["name"] == "Alice"
+        assert data[0]["rate_limits"]["requests_per_minute"] == 60
+        assert data[0]["rate_limits"]["requests_per_hour"] == 500
+        assert data[0]["rate_limits"]["requests_per_day"] == 0
 
     def test_list_users_empty(self, client, mock_redis):
         mock_redis.scan.return_value = ("0", [])
@@ -77,14 +82,17 @@ class TestListUsers:
 
 class TestGetUser:
     def test_get_user(self, client, mock_redis):
-        mock_redis.hgetall.return_value = {
-            "name": "Alice",
-            "is_admin": "false",
-            "created_at": "1700000000",
-        }
+        mock_redis.hgetall.side_effect = [
+            {"name": "Alice", "is_admin": "false", "created_at": "1700000000"},
+            {"requests_per_minute": "30", "requests_per_day": "1000"},
+        ]
         resp = client.get("/admin/users/abc123")
         assert resp.status_code == 200
-        assert resp.json()["user_id"] == "abc123"
+        data = resp.json()
+        assert data["user_id"] == "abc123"
+        assert data["rate_limits"]["requests_per_minute"] == 30
+        assert data["rate_limits"]["requests_per_hour"] == 0
+        assert data["rate_limits"]["requests_per_day"] == 1000
 
     def test_get_user_not_found(self, client, mock_redis):
         mock_redis.hgetall.return_value = {}
@@ -181,9 +189,46 @@ class TestSetRateLimit:
         mock_redis.exists.return_value = True
         resp = client.put(
             "/admin/users/abc123/rate-limit",
-            json={"requests_per_minute": 120},
+            json={"requests_per_minute": 120, "requests_per_hour": 500, "requests_per_day": 5000},
         )
         assert resp.status_code == 200
+        # Verify all three fields stored
+        mock_redis.hset.assert_any_call(
+            "llmapi:ratelimit_config:abc123", "requests_per_minute", "120"
+        )
+        mock_redis.hset.assert_any_call(
+            "llmapi:ratelimit_config:abc123", "requests_per_hour", "500"
+        )
+        mock_redis.hset.assert_any_call(
+            "llmapi:ratelimit_config:abc123", "requests_per_day", "5000"
+        )
+
+    def test_set_rate_limit_backward_compat(self, client, mock_redis):
+        """Old payload with only requests_per_minute still works."""
+        mock_redis.exists.return_value = True
+        resp = client.put(
+            "/admin/users/abc123/rate-limit",
+            json={"requests_per_minute": 60},
+        )
+        assert resp.status_code == 200
+        mock_redis.hset.assert_called_once_with(
+            "llmapi:ratelimit_config:abc123", "requests_per_minute", "60"
+        )
+
+    def test_set_rate_limit_zero_removes(self, client, mock_redis):
+        """Setting hour/day to 0 removes the field (unlimited)."""
+        mock_redis.exists.return_value = True
+        resp = client.put(
+            "/admin/users/abc123/rate-limit",
+            json={"requests_per_hour": 0, "requests_per_day": 0},
+        )
+        assert resp.status_code == 200
+        mock_redis.hdel.assert_any_call(
+            "llmapi:ratelimit_config:abc123", "requests_per_hour"
+        )
+        mock_redis.hdel.assert_any_call(
+            "llmapi:ratelimit_config:abc123", "requests_per_day"
+        )
 
     def test_set_rate_limit_user_not_found(self, client, mock_redis):
         mock_redis.exists.return_value = False

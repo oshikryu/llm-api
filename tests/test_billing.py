@@ -170,7 +170,11 @@ class TestGetBilling:
 
         async def hgetall_side(key):
             if "ratelimit_config" in key:
-                return {"requests_per_minute": "60"}
+                return {
+                    "requests_per_minute": "60",
+                    "requests_per_hour": "500",
+                    "requests_per_day": "5000",
+                }
             if "limits" in key:
                 return {"max_total_tokens": "100000"}
             if "usage" in key:
@@ -178,8 +182,7 @@ class TestGetBilling:
             return {}
 
         mock_redis.hgetall = AsyncMock(side_effect=hgetall_side)
-        mock_redis.zremrangebyscore = AsyncMock()
-        mock_redis.zcard = AsyncMock(return_value=5)
+        mock_redis.zcount = AsyncMock(return_value=5)
 
         resp = billing_client.get("/billing")
         assert resp.status_code == 200
@@ -191,20 +194,27 @@ class TestGetBilling:
         assert len(data["limits"]) == 1
         assert data["limits"][0]["remaining_tokens"] == 92000
         assert data["rate_limit"]["requests_per_minute"] == 60
-        assert data["rate_limit"]["current_requests_in_window"] == 5
+        assert data["rate_limit"]["requests_per_hour"] == 500
+        assert data["rate_limit"]["requests_per_day"] == 5000
+        assert data["rate_limit"]["current_requests_per_minute"] == 5
+        assert data["rate_limit"]["current_requests_per_hour"] == 5
+        assert data["rate_limit"]["current_requests_per_day"] == 5
 
     def test_billing_default_rate_limit(self, billing_client, mock_redis):
         """When no per-user rate config, uses DEFAULT_RATE_LIMIT."""
         mock_redis.scan = AsyncMock(side_effect=_mock_scan({}))
         mock_redis.hgetall = AsyncMock(return_value={})
-        mock_redis.zremrangebyscore = AsyncMock()
-        mock_redis.zcard = AsyncMock(return_value=0)
+        mock_redis.zcount = AsyncMock(return_value=0)
 
-        with patch("config.DEFAULT_RATE_LIMIT", 120):
+        with patch("auth.DEFAULT_RATE_LIMIT", 120):
             resp = billing_client.get("/billing")
         assert resp.status_code == 200
         data = resp.json()
         assert data["rate_limit"]["requests_per_minute"] == 120
-        assert data["rate_limit"]["current_requests_in_window"] == 0
+        assert data["rate_limit"]["requests_per_hour"] == 0
+        assert data["rate_limit"]["requests_per_day"] == 0
+        assert data["rate_limit"]["current_requests_per_minute"] == 0
+        assert data["rate_limit"]["current_requests_per_hour"] == 0
+        assert data["rate_limit"]["current_requests_per_day"] == 0
         assert data["usage"] == []
         assert data["limits"] == []

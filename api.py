@@ -37,6 +37,8 @@ from auth import (
     check_rate_limit,
     check_token_limit,
     record_usage,
+    get_rate_limit_config,
+    get_rate_limit_counts,
 )
 from rag import rag_router
 
@@ -190,12 +192,21 @@ class ModelLimit(BaseModel):
     )
 
 
+class RateLimitStatus(BaseModel):
+    requests_per_minute: int
+    requests_per_hour: int
+    requests_per_day: int
+    current_requests_per_minute: int
+    current_requests_per_hour: int
+    current_requests_per_day: int
+
+
 class BillingResponse(BaseModel):
     user_id: str
     name: str
     usage: list[ModelUsage]
     limits: list[ModelLimit]
-    rate_limit: dict
+    rate_limit: RateLimitStatus
 
 
 async def _scan_keys(redis, pattern: str) -> list[str]:
@@ -339,25 +350,15 @@ async def get_my_billing(
         ))
 
     # Rate limit
-    rate_config = await redis.hgetall(f"llmapi:ratelimit_config:{user.user_id}")
-    rpm = int(rate_config.get("requests_per_minute", 0))
-    rate_key = f"llmapi:ratelimit:{user.user_id}"
-    now_ms = int(time.time() * 1000)
-    await redis.zremrangebyscore(rate_key, 0, now_ms - 60_000)
-    current_rpm = await redis.zcard(rate_key)
-
-    from config import DEFAULT_RATE_LIMIT
-    rate_limit = {
-        "requests_per_minute": rpm if rpm else DEFAULT_RATE_LIMIT,
-        "current_requests_in_window": current_rpm,
-    }
+    rl_config = await get_rate_limit_config(user.user_id, redis)
+    rl_counts = await get_rate_limit_counts(user.user_id, redis)
 
     return BillingResponse(
         user_id=user.user_id,
         name=user.name,
         usage=usages,
         limits=limits,
-        rate_limit=rate_limit,
+        rate_limit=RateLimitStatus(**rl_config, **rl_counts),
     )
 
 

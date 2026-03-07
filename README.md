@@ -90,12 +90,12 @@ python scripts/seed_admin.py
 
 This creates four users with API keys printed to stdout (save them — shown only once):
 
-| User | Role | Rate Limit | Token Limit |
-|------|------|-----------|-------------|
+| User | Role | Rate Limit (min/hr/day) | Token Limit |
+|------|------|------------------------|-------------|
 | Admin | admin | default (60/min) | unlimited |
-| Alice | user | 60/min | 500,000 |
-| Bob | user | 30/min | 100,000 |
-| Carol (Power User) | user | 120/min | unlimited |
+| Alice | user | 60/min, 500/hr, 5000/day | 500,000 |
+| Bob | user | 30/min, 200/hr, 2000/day | 100,000 |
+| Carol (Power User) | user | 120/min, 2000/hr | unlimited |
 
 Edit the `SEED_USERS` list in `scripts/seed_admin.py` to customize.
 
@@ -122,7 +122,7 @@ All admin endpoints require an admin API key:
 | `/admin/users/{user_id}/keys` | POST | Create API key (raw key shown once) |
 | `/admin/users/{user_id}/keys/{key_prefix}` | DELETE | Revoke a key |
 | `/admin/users/{user_id}/limits/{model}` | PUT | Set token limit (`{"max_total_tokens": N}`) |
-| `/admin/users/{user_id}/rate-limit` | PUT | Set rate limit (`{"requests_per_minute": N}`) |
+| `/admin/users/{user_id}/rate-limit` | PUT | Set rate limits (`{"requests_per_minute": N, "requests_per_hour": N, "requests_per_day": N}`) |
 | `/admin/users/{user_id}/usage` | GET | Token usage per model |
 
 ### Billing & Usage (Self-Service)
@@ -168,7 +168,11 @@ Response from `/billing`:
     ],
     "rate_limit": {
         "requests_per_minute": 60,
-        "current_requests_in_window": 5
+        "requests_per_hour": 500,
+        "requests_per_day": 5000,
+        "current_requests_per_minute": 5,
+        "current_requests_per_hour": 42,
+        "current_requests_per_day": 310
     }
 }
 ```
@@ -284,6 +288,8 @@ All settings are controlled via environment variables (see `config.py`):
 | `AUTH_ENABLED` | `true` | Enable/disable API key authentication |
 | `MODEL_NAME` | `default` | Model name for per-model token tracking |
 | `DEFAULT_RATE_LIMIT` | `60` | Default requests/minute when no per-user config |
+| `DEFAULT_RATE_LIMIT_HOUR` | `0` | Default requests/hour (0 = unlimited) |
+| `DEFAULT_RATE_LIMIT_DAY` | `0` | Default requests/day (0 = unlimited) |
 | `DEFAULT_TOKEN_LIMIT` | `0` | Default token limit (0 = unlimited) |
 
 ## Architecture

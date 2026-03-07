@@ -102,7 +102,7 @@ class TestCheckRateLimit:
 
         redis = AsyncMock()
         redis.hgetall.return_value = {"requests_per_minute": "60"}
-        redis.zcard.return_value = 5
+        redis.zcount.return_value = 5
         # Should not raise
         await check_rate_limit("user-1", redis)
         redis.zadd.assert_called_once()
@@ -113,7 +113,8 @@ class TestCheckRateLimit:
 
         redis = AsyncMock()
         redis.hgetall.return_value = {"requests_per_minute": "10"}
-        redis.zcard.return_value = 10
+        redis.zcount.return_value = 10
+        redis.zrangebyscore.return_value = []
         with pytest.raises(HTTPException) as exc_info:
             await check_rate_limit("user-1", redis)
         assert exc_info.value.status_code == 429
@@ -124,10 +125,94 @@ class TestCheckRateLimit:
 
         redis = AsyncMock()
         redis.hgetall.return_value = {"requests_per_minute": "5"}
-        redis.zcard.return_value = 100
+        redis.zcount.return_value = 100
+        redis.zrangebyscore.return_value = []
         with pytest.raises(HTTPException) as exc_info:
             await check_rate_limit("user-1", redis)
         assert exc_info.value.status_code == 429
+
+    @pytest.mark.asyncio
+    async def test_hour_limit_exceeded(self):
+        from auth import check_rate_limit
+
+        redis = AsyncMock()
+        redis.hgetall.return_value = {
+            "requests_per_minute": "60",
+            "requests_per_hour": "100",
+        }
+        now_ms = int(time.time() * 1000)
+
+        async def zcount_side(key, min_score, max_score):
+            window_ms = now_ms - int(float(min_score))
+            if window_ms < 100_000:  # ~minute window
+                return 5  # under minute limit
+            return 100  # at hour limit
+
+        redis.zcount = AsyncMock(side_effect=zcount_side)
+        redis.zrangebyscore.return_value = []
+        with pytest.raises(HTTPException) as exc_info:
+            await check_rate_limit("user-1", redis)
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.detail["limit_type"] == "requests_per_hour"
+
+    @pytest.mark.asyncio
+    async def test_day_limit_exceeded(self):
+        from auth import check_rate_limit
+
+        redis = AsyncMock()
+        redis.hgetall.return_value = {
+            "requests_per_minute": "60",
+            "requests_per_hour": "500",
+            "requests_per_day": "1000",
+        }
+        now_ms = int(time.time() * 1000)
+
+        async def zcount_side(key, min_score, max_score):
+            window_ms = now_ms - int(float(min_score))
+            if window_ms < 100_000:  # ~minute window
+                return 5
+            if window_ms < 4_000_000:  # ~hour window
+                return 50
+            return 1000  # at day limit
+
+        redis.zcount = AsyncMock(side_effect=zcount_side)
+        redis.zrangebyscore.return_value = []
+        with pytest.raises(HTTPException) as exc_info:
+            await check_rate_limit("user-1", redis)
+        assert exc_info.value.status_code == 429
+        assert exc_info.value.detail["limit_type"] == "requests_per_day"
+
+    @pytest.mark.asyncio
+    async def test_unlimited_tier_skipped(self):
+        from auth import check_rate_limit
+
+        redis = AsyncMock()
+        # requests_per_hour = 0 means unlimited, should be skipped
+        redis.hgetall.return_value = {
+            "requests_per_minute": "60",
+            "requests_per_hour": "0",
+            "requests_per_day": "0",
+        }
+        redis.zcount.return_value = 5
+        # Should not raise
+        await check_rate_limit("user-1", redis)
+        redis.zadd.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_retry_after_in_429_detail(self):
+        from auth import check_rate_limit
+
+        redis = AsyncMock()
+        redis.hgetall.return_value = {"requests_per_minute": "5"}
+        redis.zcount.return_value = 5
+        now_ms = int(time.time() * 1000)
+        redis.zrangebyscore.return_value = [str(now_ms - 30_000)]  # oldest is 30s ago
+        with pytest.raises(HTTPException) as exc_info:
+            await check_rate_limit("user-1", redis)
+        detail = exc_info.value.detail
+        assert detail["retry_after_seconds"] > 0
+        assert detail["limit"] == 5
+        assert detail["current"] == 5
 
 
 # ---------------------------------------------------------------------------

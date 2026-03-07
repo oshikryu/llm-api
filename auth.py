@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request
 
-from config import AUTH_ENABLED, DEFAULT_RATE_LIMIT
+from config import AUTH_ENABLED, DEFAULT_RATE_LIMIT, DEFAULT_RATE_LIMIT_HOUR, DEFAULT_RATE_LIMIT_DAY
 
 
 @dataclass
@@ -55,23 +55,66 @@ async def get_current_user(
     )
 
 
+def _get_rate_tiers():
+    return [
+        ("requests_per_minute", 60_000, DEFAULT_RATE_LIMIT),
+        ("requests_per_hour", 3_600_000, DEFAULT_RATE_LIMIT_HOUR),
+        ("requests_per_day", 86_400_000, DEFAULT_RATE_LIMIT_DAY),
+    ]
+
+
+async def get_rate_limit_config(user_id: str, redis) -> dict:
+    config = await redis.hgetall(f"llmapi:ratelimit_config:{user_id}")
+    return {
+        "requests_per_minute": int(config.get("requests_per_minute", DEFAULT_RATE_LIMIT)),
+        "requests_per_hour": int(config.get("requests_per_hour", DEFAULT_RATE_LIMIT_HOUR)),
+        "requests_per_day": int(config.get("requests_per_day", DEFAULT_RATE_LIMIT_DAY)),
+    }
+
+
+async def get_rate_limit_counts(user_id: str, redis) -> dict:
+    key = f"llmapi:ratelimit:{user_id}"
+    now_ms = int(time.time() * 1000)
+    return {
+        "current_requests_per_minute": await redis.zcount(key, now_ms - 60_000, "+inf"),
+        "current_requests_per_hour": await redis.zcount(key, now_ms - 3_600_000, "+inf"),
+        "current_requests_per_day": await redis.zcount(key, now_ms - 86_400_000, "+inf"),
+    }
+
+
 async def check_rate_limit(user_id: str, redis) -> None:
     key = f"llmapi:ratelimit:{user_id}"
-    config_key = f"llmapi:ratelimit_config:{user_id}"
     now_ms = int(time.time() * 1000)
-    window_ms = 60_000
 
-    config = await redis.hgetall(config_key)
-    limit = int(config.get("requests_per_minute", DEFAULT_RATE_LIMIT))
+    config = await redis.hgetall(f"llmapi:ratelimit_config:{user_id}")
 
-    await redis.zremrangebyscore(key, 0, now_ms - window_ms)
-    count = await redis.zcard(key)
+    # Remove entries older than 24h (largest window)
+    await redis.zremrangebyscore(key, 0, now_ms - 86_400_000)
 
-    if count >= limit:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    for tier_name, window_ms, default_limit in _get_rate_tiers():
+        limit = int(config.get(tier_name, default_limit))
+        if limit == 0:
+            continue
+        count = await redis.zcount(key, now_ms - window_ms, "+inf")
+        if count >= limit:
+            oldest = await redis.zrangebyscore(key, now_ms - window_ms, "+inf", start=0, num=1)
+            retry_after = 0
+            if oldest:
+                oldest_ms = float(oldest[0])
+                retry_after = max(0, int((oldest_ms + window_ms - now_ms) / 1000) + 1)
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "Rate limit exceeded",
+                    "limit_type": tier_name,
+                    "limit": limit,
+                    "current": count,
+                    "retry_after_seconds": retry_after,
+                },
+            )
 
     await redis.zadd(key, {str(now_ms): now_ms})
-    await redis.expire(key, 120)
+    await redis.expire(key, 86460)
 
 
 async def check_token_limit(user_id: str, model: str, redis) -> None:

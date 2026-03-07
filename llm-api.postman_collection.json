@@ -995,7 +995,7 @@
 								"billing"
 							]
 						},
-						"description": "Full billing summary: usage per model, limits with remaining budget, and current rate limit status."
+						"description": "Full billing summary: usage per model, limits with remaining budget, and multi-tier rate limit status (per-minute, per-hour, per-day limits and current counts)."
 					}
 				},
 				{
@@ -1021,7 +1021,7 @@
 								"billing"
 							]
 						},
-						"description": "Alice's billing summary (60 rpm, 500k token limit)."
+						"description": "Alice's billing summary (60/min, 500/hr, 5000/day, 500k token limit)."
 					}
 				},
 				{
@@ -1047,7 +1047,7 @@
 								"billing"
 							]
 						},
-						"description": "Bob's billing summary (30 rpm, 100k token limit)."
+						"description": "Bob's billing summary (30/min, 200/hr, 2000/day, 100k token limit)."
 					}
 				},
 				{
@@ -1073,7 +1073,7 @@
 								"billing"
 							]
 						},
-						"description": "Carol's billing summary (120 rpm, unlimited tokens)."
+						"description": "Carol's billing summary (120/min, 2000/hr, unlimited/day, unlimited tokens)."
 					}
 				}
 			]
@@ -1460,9 +1460,9 @@
 								],
 								"body": {
 									"mode": "raw",
-									"raw": "{\n    \"requests_per_minute\": 120\n}"
+									"raw": "{\n    \"requests_per_minute\": 120,\n    \"requests_per_hour\": 500,\n    \"requests_per_day\": 5000\n}"
 								},
-								"description": "Default is 60 requests/minute (configured via DEFAULT_RATE_LIMIT env var)."
+								"description": "Set per-minute, per-hour, and per-day rate limits. All fields are optional. Defaults: minute=60 (DEFAULT_RATE_LIMIT), hour=0 (unlimited), day=0 (unlimited). Setting hour/day to 0 removes that tier (unlimited)."
 							}
 						}
 					]
