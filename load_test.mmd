@@ -1,0 +1,161 @@
+graph TB
+    subgraph CLI["Command Line"]
+        SEED["seed_admin.py<br/><i>python seed_admin.py</i>"]
+        LOAD["load_test.py<br/><i>python load_test.py [--mode gate|auth|llm]</i>"]
+    end
+
+    subgraph SeedFlow["seed_admin.py — Bootstrap Users"]
+        direction TB
+        S1["Read SEED_USERS config<br/>(name, is_admin, rate_limit, token_limit)"]
+        S2["For each user:<br/>generate user_id + raw API key"]
+        S3["SHA-256 hash the raw key"]
+        S4["Write to Redis"]
+        S5["Print table with API keys<br/>(shown only once)"]
+
+        S1 --> S2 --> S3 --> S4 --> S5
+    end
+
+    subgraph SeedRedis["Redis Keys Created by Seed"]
+        direction LR
+        SK1["llmapi:user:{id}<br/>Hash: name, is_admin, created_at"]
+        SK2["llmapi:apikey:{sha256}<br/>String: user_id"]
+        SK3["llmapi:user:{id}:keys<br/>Set: hash:prefix"]
+        SK4["llmapi:ratelimit_config:{id}<br/>Hash: requests_per_minute"]
+        SK5["llmapi:limits:{id}:default<br/>Hash: max_total_tokens"]
+    end
+
+    subgraph LoadFlow["load_test.py — Load Test Flow"]
+        direction TB
+        L1["1. Seed fresh test users<br/>(same profiles as seed_admin)"]
+        L2["2. Build weighted user pool"]
+        L3["3. Select mode endpoints"]
+        L4["4. Spawn async request loop<br/>paced to target RPS"]
+        L5["5. Gather all responses"]
+        L6["6. Compute per-user stats"]
+        L7["7. Output JSON to stdout"]
+
+        L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7
+    end
+
+    subgraph Modes["Test Modes (--mode)"]
+        direction TB
+        subgraph GateMode["gate (default)"]
+            GM_DESC["Pure auth gate throughput<br/>200-1000+ rps · timeout 5s"]
+            GM_EP["GET /me<br/>auth + rate limit + token limit<br/><b>zero LLM inference</b>"]
+        end
+        subgraph AuthMode["auth"]
+            AM_DESC["Auth + minimal LLM<br/>20-100 rps · timeout 10s"]
+            AM_EP["/chat, /completion, /query<br/>max_tokens=4"]
+        end
+        subgraph LLMMode["llm"]
+            LM_DESC["Full inference throughput<br/>10-50 rps · timeout 120s"]
+            LM_EP["/chat, /completion, /query<br/>max_tokens=16"]
+        end
+    end
+
+    subgraph WeightedPool["Weighted Traffic Distribution"]
+        direction LR
+        W_ADMIN["Admin<br/>10%<br/>weight=1"]
+        W_ALICE["Alice<br/>30%<br/>weight=3<br/><i>60 rpm / 500k tokens</i>"]
+        W_BOB["Bob<br/>20%<br/>weight=2<br/><i>30 rpm / 100k tokens</i>"]
+        W_CAROL["Carol<br/>40%<br/>weight=4<br/><i>120 rpm / unlimited</i>"]
+    end
+
+    subgraph RequestWorker["Async Request Worker"]
+        direction TB
+        RW1["Pick user from<br/>weighted pool"]
+        RW2["Pick endpoint<br/>(round-robin)"]
+        RW3["Send HTTP request<br/>with Bearer token"]
+        RW4["Record status code<br/>+ latency"]
+
+        RW1 --> RW2 --> RW3 --> RW4
+    end
+
+    subgraph API["FastAPI Server"]
+        direction TB
+        AUTH_LYR["Auth Layer<br/>validate API key<br/>(SHA-256 lookup)"]
+        RATE["Rate Limiter<br/>sliding window 60s<br/>(Redis sorted set)"]
+        TOKEN["Token Limit Check<br/>per-user per-model<br/>(Redis hash)"]
+        ME_RET["Return user info<br/>(gate mode stops here)"]
+        LLM["LLM Backend<br/>llama-server<br/>(semaphore-gated)"]
+
+        AUTH_LYR --> RATE --> TOKEN
+        TOKEN -->|"gate: GET /me"| ME_RET
+        TOKEN -->|"auth/llm: POST endpoints"| LLM
+    end
+
+    subgraph Responses["Response Classification"]
+        direction LR
+        R200["200 OK<br/><b>success</b>"]
+        R429["429<br/><b>rate_limited</b>"]
+        R403["403<br/><b>token_limited</b>"]
+        R401["401<br/><b>auth_error</b>"]
+        R5xx["5xx<br/><b>server_error</b>"]
+        R0["Timeout<br/><b>timeout</b>"]
+    end
+
+    subgraph StatsTracker["Per-User Stats (UserStats)"]
+        direction TB
+        ST1["user_id / name / rate_limit_rpm"]
+        ST2["Counters: total, success,<br/>429, 403, 401, 5xx, timeout"]
+        ST3["Latency list → min,<br/>median, p95, p99, max"]
+    end
+
+    subgraph Output["JSON Output (stdout)"]
+        direction TB
+        OUT_SUM["summary:<br/>mode, target_rps, actual_rps,<br/>wall_time, totals per status,<br/>aggregate latency percentiles"]
+        OUT_USR["users: array of<br/>  { user_id, name, rate_limit_rpm,<br/>    total, success,<br/>    429, 403, 401, 5xx, timeout,<br/>    latency percentiles }"]
+    end
+
+    SEED --> SeedFlow
+    SeedFlow --> SeedRedis
+
+    LOAD --> LoadFlow
+    L1 -->|"seed_users()"| SeedRedis
+    L2 --> WeightedPool
+    L3 --> Modes
+    L4 --> RequestWorker
+    RequestWorker -->|"httpx.AsyncClient<br/>+ concurrency semaphore"| API
+    API --> Responses
+    ME_RET --> Responses
+    LLM --> Responses
+    Responses --> RW4
+    RW4 --> StatsTracker
+    L6 --> StatsTracker
+    StatsTracker --> Output
+
+    REDIS[("Redis")]
+    SeedRedis --> REDIS
+    API -->|"auth + rate limit<br/>+ token limit lookup"| REDIS
+
+    %% Styling
+    classDef cli fill:#6c5ce7,color:#fff,stroke:#5a4bd1
+    classDef seed fill:#2a9d8f,color:#fff,stroke:#1f7a6e
+    classDef load fill:#e76f51,color:#fff,stroke:#c45a3c
+    classDef redis fill:#dc382c,color:#fff,stroke:#a0261e
+    classDef api fill:#457b9d,color:#fff,stroke:#2a5f7e
+    classDef response fill:#f4a261,color:#000,stroke:#e08a3c
+    classDef stats fill:#264653,color:#fff,stroke:#1a323d
+    classDef output fill:#2d6a4f,color:#fff,stroke:#1b4332
+    classDef weight fill:#a8dadc,color:#000,stroke:#7fb8bc
+    classDef modeGate fill:#0984e3,color:#fff,stroke:#0767b2
+    classDef modeAuth fill:#00b894,color:#fff,stroke:#00997a
+    classDef modeLLM fill:#d63031,color:#fff,stroke:#b02727
+    classDef gateReturn fill:#74b9ff,color:#000,stroke:#5a9fd4
+
+    class SEED,LOAD cli
+    class S1,S2,S3,S4,S5 seed
+    class SK1,SK2,SK3,SK4,SK5 seed
+    class L1,L2,L3,L4,L5,L6,L7 load
+    class RW1,RW2,RW3,RW4 load
+    class REDIS redis
+    class AUTH_LYR,RATE,TOKEN api
+    class LLM modeLLM
+    class ME_RET gateReturn
+    class R200,R429,R403,R401,R5xx,R0 response
+    class ST1,ST2,ST3 stats
+    class OUT_SUM,OUT_USR output
+    class W_ADMIN,W_ALICE,W_BOB,W_CAROL weight
+    class GM_DESC,GM_EP modeGate
+    class AM_DESC,AM_EP modeAuth
+    class LM_DESC,LM_EP modeLLM

@@ -147,6 +147,21 @@ async def health_check():
     }
 
 
+@app.get("/me")
+async def get_me(
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """Return current user info. Runs full auth + rate limit pipeline, no LLM."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+    return {
+        "user_id": user.user_id,
+        "name": user.name,
+        "is_admin": user.is_admin,
+    }
+
+
 @app.post("/completion", response_model=CompletionResponse)
 async def create_completion(
     request: CompletionRequest,

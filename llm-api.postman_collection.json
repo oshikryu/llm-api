@@ -57,7 +57,7 @@
 	},
 	"item": [
 		{
-			"name": "Health",
+			"name": "Health & Auth",
 			"item": [
 				{
 					"name": "Health Check",
@@ -71,6 +71,18 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["health"]
 						}
+					}
+				},
+				{
+					"name": "Get Current User (Me)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/me",
+							"host": ["{{baseUrl}}"],
+							"path": ["me"]
+						},
+						"description": "Returns current user info. Runs full auth + rate limit + token limit pipeline with zero LLM inference. Used by load_test.py --mode gate."
 					}
 				}
 			]

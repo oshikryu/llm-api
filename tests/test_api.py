@@ -300,6 +300,20 @@ class TestAnalyze:
 
 
 # ---------------------------------------------------------------------------
+# GET /me
+# ---------------------------------------------------------------------------
+
+
+class TestMe:
+    def test_me_returns_user(self, client, mock_httpx):
+        resp = client.get("/me")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["user_id"] == "anonymous"
+        assert data["is_admin"] is True
+
+
+# ---------------------------------------------------------------------------
 # _looks_complete helper
 # ---------------------------------------------------------------------------
 

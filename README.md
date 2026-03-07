@@ -33,7 +33,12 @@ When running moondream:
 ```bash
 source venv/bin/activate
 pip install -r requirements.txt
+
+# Development (single worker, auto-reload)
 uvicorn api:app --reload --port 8000
+
+# Production / load testing (multiple workers)
+uvicorn api:app --port 8000 --workers 4
 ```
 
 ### Docker (Multi-Instance)
@@ -71,6 +76,150 @@ Available model env files:
 | `.env.llama` | Llama 3.2 1B Instruct Q8 | 8192 |
 | `.env.moondream` | Moondream2 (multimodal) | 2048 |
 
+## Authentication & User Management
+
+The API supports multi-user API key authentication with per-user rate limiting and token usage tracking. All auth state is stored in Redis.
+
+### Bootstrap Users
+
+Seed initial users (admin + regular users with rate/token limits):
+
+```bash
+python seed_admin.py
+```
+
+This creates four users with API keys printed to stdout (save them — shown only once):
+
+| User | Role | Rate Limit | Token Limit |
+|------|------|-----------|-------------|
+| Admin | admin | default (60/min) | unlimited |
+| Alice | user | 60/min | 500,000 |
+| Bob | user | 30/min | 100,000 |
+| Carol (Power User) | user | 120/min | unlimited |
+
+Edit the `SEED_USERS` list in `seed_admin.py` to customize.
+
+### Using API Keys
+
+Pass your key via `Authorization: Bearer <key>` or `X-API-Key: <key>`:
+
+```bash
+curl -H "Authorization: Bearer llm-YOUR_KEY" http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"messages": [{"role": "user", "content": "Hello"}]}'
+```
+
+### Admin Endpoints
+
+All admin endpoints require an admin API key:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/users` | POST | Create user |
+| `/admin/users` | GET | List all users |
+| `/admin/users/{user_id}` | GET | User details |
+| `/admin/users/{user_id}` | DELETE | Delete user + all keys |
+| `/admin/users/{user_id}/keys` | POST | Create API key (raw key shown once) |
+| `/admin/users/{user_id}/keys/{key_prefix}` | DELETE | Revoke a key |
+| `/admin/users/{user_id}/limits/{model}` | PUT | Set token limit (`{"max_total_tokens": N}`) |
+| `/admin/users/{user_id}/rate-limit` | PUT | Set rate limit (`{"requests_per_minute": N}`) |
+| `/admin/users/{user_id}/usage` | GET | Token usage per model |
+
+### Disabling Auth
+
+Set `AUTH_ENABLED=false` to disable authentication (all requests treated as admin):
+
+```bash
+AUTH_ENABLED=false uvicorn api:app --reload --port 8000
+```
+
+## Load Testing
+
+Simulate hundreds of requests per second across multiple users to validate rate limiting, token limits, and concurrency handling.
+
+### Quick Start
+
+```bash
+# Requires Redis running and API server up
+python load_test.py                            # gate mode (default): 200 rps, 5s
+python load_test.py --rps 1000 --duration 10   # 1000 rps gate stress test
+python load_test.py --mode llm --rps 20        # llm mode: real inference, lower rps
+```
+
+### Modes
+
+| Mode | What it tests | Endpoint | Typical RPS | Default timeout |
+|------|--------------|----------|-------------|-----------------|
+| `gate` (default) | Full auth + rate limit + token limit pipeline, **zero LLM inference**. Pure request-handling throughput. | `GET /me` | 200–1000+ | 5s |
+| `auth` | Auth pipeline + minimal LLM work (`max_tokens=4`). Still bottlenecked by llama-server. | `/chat`, `/completion`, `/query` | 20–100 | 10s |
+| `llm` | Full LLM inference (`max_tokens=16`). Bottlenecked by llama-server throughput (~4 parallel slots). | `/chat`, `/completion`, `/query` | 10–50 | 120s |
+
+Use `gate` mode for high-RPS stress testing of auth and rate limiting without LLM saturation. Use `auth` to test the full request path with minimal inference. Use `llm` to benchmark end-to-end throughput.
+
+### Options
+
+```bash
+python load_test.py --rps 1000 --duration 10                  # 1000 rps gate stress
+python load_test.py --mode auth --rps 50                      # auth + minimal LLM
+python load_test.py --mode llm --rps 20 --duration 10         # LLM throughput test
+python load_test.py --base-url http://api-host:8000 --rps 300 # remote target
+python load_test.py --mode llm --timeout 180                  # custom timeout
+```
+
+### How It Works
+
+1. Seeds **fresh test users** into Redis (Admin, Alice, Bob, Carol) with realistic rate/token limits
+2. Distributes traffic with **weighted round-robin** — Carol 40%, Alice 30%, Bob 20%, Admin 10%
+3. Rotates across `/chat`, `/completion`, and `/query` endpoints
+4. Paces requests to hit the target RPS with a concurrency cap
+
+### Output
+
+Progress goes to stderr; structured JSON results go to stdout (pipe-friendly):
+
+```bash
+python load_test.py --rps 200 --duration 5 | jq .
+```
+
+Output structure:
+
+```json
+{
+  "summary": {
+    "mode": "gate",
+    "target_rps": 200,
+    "duration_seconds": 5,
+    "total_requests": 1000,
+    "wall_time_seconds": 5.12,
+    "actual_rps": 195.3,
+    "total_success": 620,
+    "total_rate_limited_429": 340,
+    "total_token_limited_403": 15,
+    "total_timeout": 0,
+    "total_errors": 25,
+    "latency_ms": { "min": 1.2, "median": 8.5, "p95": 45.3, "p99": 120.1, "max": 350.0 }
+  },
+  "users": [
+    {
+      "user_id": "abc123...",
+      "name": "Alice",
+      "total_requests": 300,
+      "success": 58,
+      "rate_limited_429": 240,
+      "token_limited_403": 2,
+      "auth_error_401": 0,
+      "server_error_5xx": 0,
+      "timeout": 0,
+      "latency_ms": { "min": 1.5, "median": 7.2, "p95": 30.0, "p99": 85.0, "max": 120.0 }
+    }
+  ]
+}
+```
+
+Each entry in `users` includes full per-user breakdowns: success count, 429s (rate limited), 403s (token limit exceeded), errors, timeouts, and latency percentiles.
+
+See [`load_test.mmd`](load_test.mmd) for a visual diagram of the load test architecture.
+
 ## Configuration
 
 All settings are controlled via environment variables (see `config.py`):
@@ -79,9 +228,13 @@ All settings are controlled via environment variables (see `config.py`):
 |---|---|---|
 | `LLAMA_SERVER_URL` | `http://localhost:8080` | Base URL of llama-server (or nginx LB) |
 | `LLAMA_PARALLEL_SLOTS` | `4` | Max concurrent LLM requests (semaphore limit) |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection for async queue |
+| `REDIS_URL` | `redis://localhost:6379` | Redis connection for async queue + auth state |
 | `REQUEST_TIMEOUT` | `120` | Default request timeout (seconds) |
 | `STREAM_TIMEOUT` | `600` | Timeout for streaming requests (seconds) |
+| `AUTH_ENABLED` | `true` | Enable/disable API key authentication |
+| `MODEL_NAME` | `default` | Model name for per-model token tracking |
+| `DEFAULT_RATE_LIMIT` | `60` | Default requests/minute when no per-user config |
+| `DEFAULT_TOKEN_LIMIT` | `0` | Default token limit (0 = unlimited) |
 
 ## Architecture
 
