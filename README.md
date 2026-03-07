@@ -29,33 +29,47 @@ When running moondream:
   --ubatch-size 128
 ```
 
-2. Install Python dependencies:
+2. Install Python dependencies and start the API:
 ```bash
-cd llm_api
+source venv/bin/activate
 pip install -r requirements.txt
-```
-
-3. Start the API:
-```bash
 uvicorn api:app --reload --port 8000
 ```
 
 ### Docker (Multi-Instance)
 
-Launch the full stack with two llama-server instances, nginx load balancer, Redis, the API, and a queue worker:
+Launch the full stack with two llama-server instances, nginx load balancer, Redis, the API, and a queue worker. Models are loaded from `~/projects/models/`.
 
+**Moondream2 (default):**
 ```bash
 docker-compose up --build
 ```
 
+**Llama 3.2 1B Instruct:**
+```bash
+docker-compose --env-file .env.llama up --build
+```
+
+**Switch back to Moondream2:**
+```bash
+docker-compose --env-file .env.moondream up --build
+```
+
+The default `.env` file loads Moondream2. Use `--env-file` to select a different model configuration.
+
 This starts:
-- **llama-server-1 / llama-server-2** — two llama.cpp inference backends
+- **llama-server-1 / llama-server-2** — two llama.cpp inference backends (built from source)
 - **nginx** — `least_conn` load balancer fronting both servers on port 8080
 - **redis** — backing store for the async job queue
 - **api** — FastAPI application on port 8000 (4 gunicorn/uvicorn workers)
 - **worker** — arq queue worker for async job processing
 
-Place your model file in the `models` Docker volume before starting.
+Available model env files:
+| File | Model | Context |
+|---|---|---|
+| `.env` (default) | Moondream2 (multimodal) | 2048 |
+| `.env.llama` | Llama 3.2 1B Instruct Q8 | 8192 |
+| `.env.moondream` | Moondream2 (multimodal) | 2048 |
 
 ## Configuration
 

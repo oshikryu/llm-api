@@ -1,43 +1,15 @@
 services:
   llama-server-1:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    build: ./llama-server
     volumes:
-      - models:/models
-    command: >
-      --model /models/model.gguf
-      --port 8080
-      --host 0.0.0.0
-      --ctx-size 8192
-      --n-predict 512
-      --parallel 4
-      --n-gpu-layers 99
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - ~/projects/models:/models:ro
+    command: ${LLAMA_CMD}
 
   llama-server-2:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    build: ./llama-server
     volumes:
-      - models:/models
-    command: >
-      --model /models/model.gguf
-      --port 8080
-      --host 0.0.0.0
-      --ctx-size 8192
-      --n-predict 512
-      --parallel 4
-      --n-gpu-layers 99
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - ~/projects/models:/models:ro
+    command: ${LLAMA_CMD}
 
   nginx:
     image: nginx:alpine
@@ -76,6 +48,3 @@ services:
     depends_on:
       - nginx
       - redis
-
-volumes:
-  models:

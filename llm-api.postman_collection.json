@@ -1,0 +1,533 @@
+{
+	"info": {
+		"name": "Local LLM API",
+		"description": "Example queries for the local llama-server API wrapper with RAG, async queuing, and streaming support.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8000"
+		}
+	],
+	"item": [
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Completion",
+			"item": [
+				{
+					"name": "Basic Completion",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/completion",
+							"host": ["{{baseUrl}}"],
+							"path": ["completion"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"prompt\": \"Explain what machine learning is in one paragraph.\",\n    \"max_tokens\": 256,\n    \"temperature\": 0.7\n}"
+						}
+					}
+				},
+				{
+					"name": "Completion with Stop Sequences",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/completion",
+							"host": ["{{baseUrl}}"],
+							"path": ["completion"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"prompt\": \"List three programming languages:\\n1.\",\n    \"max_tokens\": 128,\n    \"temperature\": 0.5,\n    \"top_p\": 0.9,\n    \"stop\": [\"4.\", \"\\n\\n\"]\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Chat",
+			"item": [
+				{
+					"name": "Basic Chat",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/chat",
+							"host": ["{{baseUrl}}"],
+							"path": ["chat"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\"role\": \"user\", \"content\": \"What is 2+2?\"}\n    ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Chat with System Prompt",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/chat",
+							"host": ["{{baseUrl}}"],
+							"path": ["chat"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\"role\": \"system\", \"content\": \"You are a helpful assistant that responds concisely.\"},\n        {\"role\": \"user\", \"content\": \"Explain the difference between TCP and UDP.\"}\n    ],\n    \"max_tokens\": 512,\n    \"temperature\": 0.7\n}"
+						}
+					}
+				},
+				{
+					"name": "Chat with Continue Until Done",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/chat",
+							"host": ["{{baseUrl}}"],
+							"path": ["chat"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\"role\": \"user\", \"content\": \"Write a detailed explanation of how neural networks work, including backpropagation.\"}\n    ],\n    \"max_tokens\": 512,\n    \"temperature\": 0.7,\n    \"continue_until_done\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "Chat Multi-Turn Conversation",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/chat",
+							"host": ["{{baseUrl}}"],
+							"path": ["chat"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\"role\": \"user\", \"content\": \"What is Python?\"},\n        {\"role\": \"assistant\", \"content\": \"Python is a high-level, interpreted programming language known for its readability and versatility.\"},\n        {\"role\": \"user\", \"content\": \"What are its main use cases?\"}\n    ]\n}"
+						}
+					}
+				},
+				{
+					"name": "Chat Stream",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/chat/stream",
+							"host": ["{{baseUrl}}"],
+							"path": ["chat", "stream"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\"role\": \"user\", \"content\": \"Write a short poem about coding.\"}\n    ],\n    \"max_tokens\": 256,\n    \"temperature\": 0.9\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Query",
+			"item": [
+				{
+					"name": "Query (Markdown)",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/query",
+							"host": ["{{baseUrl}}"],
+							"path": ["query"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"What are the SOLID principles in software engineering?\",\n    \"output_format\": \"markdown\",\n    \"max_tokens\": 512\n}"
+						}
+					}
+				},
+				{
+					"name": "Query (JSON)",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/query",
+							"host": ["{{baseUrl}}"],
+							"path": ["query"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"What are the top 3 most popular programming languages?\",\n    \"output_format\": \"json\",\n    \"max_tokens\": 512,\n    \"temperature\": 0.5\n}"
+						}
+					}
+				},
+				{
+					"name": "Query (Plain)",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/query",
+							"host": ["{{baseUrl}}"],
+							"path": ["query"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"What is the capital of France?\",\n    \"output_format\": \"plain\",\n    \"max_tokens\": 128\n}"
+						}
+					}
+				},
+				{
+					"name": "Query (Custom System Prompt)",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/query",
+							"host": ["{{baseUrl}}"],
+							"path": ["query"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Explain recursion\",\n    \"system_prompt\": \"You are a pirate who explains programming concepts using nautical metaphors.\",\n    \"max_tokens\": 256,\n    \"temperature\": 0.9\n}"
+						}
+					}
+				},
+				{
+					"name": "Query (GET)",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/query?q=What is Docker?&format=markdown&max_tokens=256",
+							"host": ["{{baseUrl}}"],
+							"path": ["query"],
+							"query": [
+								{"key": "q", "value": "What is Docker?"},
+								{"key": "format", "value": "markdown"},
+								{"key": "max_tokens", "value": "256"}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Analyze",
+			"item": [
+				{
+					"name": "Analyze with Context",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/analyze?prompt=Summarize the key points&context=Machine learning is a subset of artificial intelligence that enables systems to learn from data. It uses algorithms to identify patterns and make decisions with minimal human intervention. Common approaches include supervised learning, unsupervised learning, and reinforcement learning.",
+							"host": ["{{baseUrl}}"],
+							"path": ["analyze"],
+							"query": [
+								{"key": "prompt", "value": "Summarize the key points"},
+								{"key": "context", "value": "Machine learning is a subset of artificial intelligence that enables systems to learn from data. It uses algorithms to identify patterns and make decisions with minimal human intervention. Common approaches include supervised learning, unsupervised learning, and reinforcement learning."}
+							]
+						}
+					}
+				},
+				{
+					"name": "Analyze without Context",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/analyze?prompt=What are the benefits of test-driven development?",
+							"host": ["{{baseUrl}}"],
+							"path": ["analyze"],
+							"query": [
+								{"key": "prompt", "value": "What are the benefits of test-driven development?"}
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "RAG",
+			"item": [
+				{
+					"name": "Ingest Documents",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/documents",
+							"host": ["{{baseUrl}}"],
+							"path": ["documents"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"documents\": [\n        {\n            \"content\": \"The O-1A visa is for individuals with extraordinary ability in sciences, education, business, or athletics. Applicants must demonstrate sustained national or international acclaim.\",\n            \"metadata\": {\"source\": \"immigration-guide\", \"topic\": \"o1a\"}\n        },\n        {\n            \"content\": \"O-1A criteria include: awards, membership in associations, published material, judging, original contributions, scholarly articles, employment in a critical role, and high salary.\",\n            \"metadata\": {\"source\": \"immigration-guide\", \"topic\": \"o1a\"}\n        }\n    ],\n    \"collection\": \"visa-docs\",\n    \"chunk_size\": 500\n}"
+						}
+					}
+				},
+				{
+					"name": "Search Documents",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/search",
+							"host": ["{{baseUrl}}"],
+							"path": ["search"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"visa criteria\",\n    \"collection\": \"visa-docs\",\n    \"n_results\": 5\n}"
+						}
+					}
+				},
+				{
+					"name": "Search with Filter",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/search",
+							"host": ["{{baseUrl}}"],
+							"path": ["search"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"requirements\",\n    \"collection\": \"visa-docs\",\n    \"n_results\": 3,\n    \"where\": {\"topic\": \"o1a\"}\n}"
+						}
+					}
+				},
+				{
+					"name": "RAG Query",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/rag",
+							"host": ["{{baseUrl}}"],
+							"path": ["rag"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"What are the requirements for an O-1A visa?\",\n    \"collection\": \"visa-docs\",\n    \"n_results\": 3,\n    \"include_sources\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "RAG with Custom System Prompt",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/rag",
+							"host": ["{{baseUrl}}"],
+							"path": ["rag"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"query\": \"Summarize the O-1A criteria\",\n    \"collection\": \"visa-docs\",\n    \"system_prompt\": \"You are an immigration lawyer. Answer based only on the provided context. Be precise and cite specific criteria.\",\n    \"temperature\": 0.3,\n    \"max_tokens\": 256\n}"
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Collections",
+			"item": [
+				{
+					"name": "List Collections",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/collections",
+							"host": ["{{baseUrl}}"],
+							"path": ["collections"]
+						}
+					}
+				},
+				{
+					"name": "Get Collection Info",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/collections/visa-docs",
+							"host": ["{{baseUrl}}"],
+							"path": ["collections", "visa-docs"]
+						}
+					}
+				},
+				{
+					"name": "Delete Collection",
+					"request": {
+						"method": "DELETE",
+						"url": {
+							"raw": "{{baseUrl}}/collections/visa-docs",
+							"host": ["{{baseUrl}}"],
+							"path": ["collections", "visa-docs"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Async Jobs",
+			"item": [
+				{
+					"name": "Submit Async Chat",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/chat/async",
+							"host": ["{{baseUrl}}"],
+							"path": ["chat", "async"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"messages\": [\n        {\"role\": \"user\", \"content\": \"Write a detailed essay about the history of computing.\"}\n    ],\n    \"max_tokens\": 1024,\n    \"continue_until_done\": true\n}"
+						}
+					}
+				},
+				{
+					"name": "Submit Async Completion",
+					"request": {
+						"method": "POST",
+						"url": {
+							"raw": "{{baseUrl}}/completion/async",
+							"host": ["{{baseUrl}}"],
+							"path": ["completion", "async"]
+						},
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"prompt\": \"The history of artificial intelligence began\",\n    \"max_tokens\": 512,\n    \"temperature\": 0.7\n}"
+						}
+					}
+				},
+				{
+					"name": "Poll Job Status",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/jobs/{{job_id}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["jobs", "{{job_id}}"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
