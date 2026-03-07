@@ -16,7 +16,7 @@ FastAPI wrapper around a local llama-server (llama.cpp) with RAG support, async 
 
 ```
 api.py              # Main FastAPI app — endpoints, lifespan, shared httpx client + semaphore
-auth.py             # Auth module — API key validation, rate limiting, token limits
+auth.py             # Auth module — API key validation, rate limiting, token limits, call history
 admin.py            # Admin endpoints — user/key/limit CRUD
 config.py           # Centralized env-var configuration
 queue_tasks.py      # arq worker task functions (process_chat_completion, process_completion)
@@ -44,7 +44,7 @@ tests/
   test_api.py       # Tests for core API endpoints
   test_auth.py      # Tests for auth module
   test_admin.py     # Tests for admin endpoints
-  test_billing.py   # Tests for billing/usage endpoints
+  test_billing.py   # Tests for billing/usage/history endpoints
   test_rag.py       # Tests for RAG endpoints
   test_concurrency.py # Tests for semaphore concurrency control
   test_queue.py     # Tests for async job endpoints

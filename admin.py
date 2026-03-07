@@ -7,6 +7,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+import json
+
 from auth import User, get_current_user, get_redis, require_admin, get_rate_limit_config
 
 router = APIRouter(prefix="/admin")
@@ -170,6 +172,7 @@ async def delete_user(
         if cursor == "0" or cursor == 0:
             break
 
+    await redis.delete(f"llmapi:history:{user_id}")
     await redis.delete(f"llmapi:user:{user_id}")
     return {"message": f"User {user_id} deleted"}
 
@@ -300,3 +303,41 @@ async def get_usage(
         if cursor == "0" or cursor == 0:
             break
     return usages
+
+
+class CallHistoryEntry(BaseModel):
+    timestamp: float
+    endpoint: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    status: str
+
+
+@router.get("/users/{user_id}/history")
+async def get_user_history(
+    user_id: str,
+    offset: int = 0,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """View a user's API call history (admin only)."""
+    require_admin(user)
+    exists = await redis.exists(f"llmapi:user:{user_id}")
+    if not exists:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    limit = min(limit, 100)
+    key = f"llmapi:history:{user_id}"
+    total = await redis.llen(key)
+    raw = await redis.lrange(key, offset, offset + limit - 1)
+    history = [CallHistoryEntry(**json.loads(entry)) for entry in raw]
+    return {
+        "user_id": user_id,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "history": history,
+    }

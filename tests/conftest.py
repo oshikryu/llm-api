@@ -21,6 +21,8 @@ def mock_redis():
     mock_r.zcard.return_value = 0
     mock_r.zcount.return_value = 0
     mock_r.hincrby.return_value = 0
+    mock_r.llen.return_value = 0
+    mock_r.lrange.return_value = []
     from api import app
     app.state.redis = mock_r
     yield mock_r

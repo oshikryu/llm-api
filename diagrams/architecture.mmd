@@ -38,6 +38,7 @@ graph TB
                 BILLING_USAGE_MODEL["/usage/{model}<br/>specific model"]
                 BILLING_LIMITS["/limits<br/>remaining budget"]
                 BILLING_FULL["/billing<br/>full summary"]
+                BILLING_HISTORY["/history<br/>call history"]
             end
 
             subgraph AdminEndpoints["Admin Endpoints (admin.py)"]
@@ -46,6 +47,7 @@ graph TB
                 LIMITS["/admin/users/{id}/limits/{model}<br/>set token cap"]
                 RATE_CFG["/admin/users/{id}/rate-limit<br/>set min/hr/day"]
                 USAGE["/admin/users/{id}/usage<br/>view stats"]
+                HISTORY["/admin/users/{id}/history<br/>call history"]
             end
 
             subgraph Internals["Internal Helpers"]
@@ -54,6 +56,7 @@ graph TB
                 DO_QUERY["_do_query()"]
                 LLM_POST["_llm_post()<br/>semaphore-gated"]
                 RECORD["record_usage()"]
+                RECORD_CALL["record_call()"]
             end
         end
 
@@ -95,7 +98,9 @@ graph TB
     NGINX --> LLAMA2
 
     COMP & CHAT & QUERY & ANALYZE & RAG_EP & STREAM -->|after response| RECORD
+    COMP & CHAT & QUERY & ANALYZE & STREAM -->|after response| RECORD_CALL
     RECORD -->|"HINCRBY<br/>llmapi:usage:{user}:{model}"| REDIS
+    RECORD_CALL -->|"LPUSH + LTRIM<br/>llmapi:history:{user}"| REDIS
 
     CHAT_ASYNC & COMP_ASYNC -->|"enqueue_job<br/>+ _user_id"| REDIS
     REDIS -->|dequeue| PROC_CHAT & PROC_COMP
@@ -105,9 +110,10 @@ graph TB
 
     BillingEndpoints -->|auth only| AuthLayer
     BILLING_USAGE & BILLING_USAGE_MODEL & BILLING_LIMITS & BILLING_FULL -->|"SCAN + HGETALL<br/>llmapi:usage / llmapi:limits"| REDIS
+    BILLING_HISTORY -->|"LLEN + LRANGE<br/>llmapi:history:{user}"| REDIS
 
     AdminEndpoints -->|require_admin| AuthLayer
-    USERS_CRUD & KEYS_MGMT & LIMITS & RATE_CFG & USAGE --> REDIS
+    USERS_CRUD & KEYS_MGMT & LIMITS & RATE_CFG & USAGE & HISTORY --> REDIS
 
     subgraph SeedCLI["Bootstrap"]
         SEED["seed_admin.py<br/>create first admin + key"]
@@ -136,6 +142,7 @@ graph TB
         K5["llmapi:limits:{id}:{model}<br/>Hash: max_total_tokens"]
         K6["llmapi:ratelimit:{id}<br/>Sorted Set: timestamps (24h TTL)"]
         K7["llmapi:ratelimit_config:{id}<br/>Hash: requests_per_minute,<br/>requests_per_hour, requests_per_day"]
+        K8["llmapi:history:{id}<br/>List: JSON call entries (max 1000)"]
     end
 
     %% Styling
@@ -151,9 +158,9 @@ graph TB
     class REDIS redis
     class LLAMA1,LLAMA2,NGINX llm
     class GET_USER,RATE,TOKEN_CHK auth
-    class USERS_CRUD,KEYS_MGMT,LIMITS,RATE_CFG,USAGE admin
+    class USERS_CRUD,KEYS_MGMT,LIMITS,RATE_CFG,USAGE,HISTORY admin
     class COMP,CHAT,STREAM,QUERY,ANALYZE,RAG_EP,RAG_DOCS,RAG_SEARCH,COLLECTIONS,CHAT_ASYNC,COMP_ASYNC,JOBS,HEALTH endpoint
-    class BILLING_USAGE,BILLING_USAGE_MODEL,BILLING_LIMITS,BILLING_FULL endpoint
-    class DO_CHAT,DO_COMP,DO_QUERY,LLM_POST,RECORD,PROC_CHAT,PROC_COMP,WORKER_USAGE internal
+    class BILLING_USAGE,BILLING_USAGE_MODEL,BILLING_LIMITS,BILLING_FULL,BILLING_HISTORY endpoint
+    class DO_CHAT,DO_COMP,DO_QUERY,LLM_POST,RECORD,RECORD_CALL,PROC_CHAT,PROC_COMP,WORKER_USAGE internal
     class CFG_AUTH,CFG_MODEL,CFG_RATE,CFG_RATE_HR,CFG_RATE_DAY,CFG_TOKEN,CFG_LLAMA,CFG_REDIS,CFG_SLOTS config
     class SEED seed

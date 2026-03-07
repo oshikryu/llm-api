@@ -303,6 +303,43 @@ class TestRecordUsage:
 
 
 # ---------------------------------------------------------------------------
+# record_call
+# ---------------------------------------------------------------------------
+
+
+class TestRecordCall:
+    @pytest.mark.asyncio
+    async def test_stores_entry(self):
+        import json
+        from auth import record_call
+
+        redis = AsyncMock()
+        await record_call("user-1", "/chat", "default", 50, 100, redis)
+        redis.lpush.assert_called_once()
+        key, entry_json = redis.lpush.call_args[0]
+        assert key == "llmapi:history:user-1"
+        entry = json.loads(entry_json)
+        assert entry["endpoint"] == "/chat"
+        assert entry["model"] == "default"
+        assert entry["prompt_tokens"] == 50
+        assert entry["completion_tokens"] == 100
+        assert entry["total_tokens"] == 150
+        assert entry["status"] == "ok"
+        assert "timestamp" in entry
+        redis.ltrim.assert_called_once_with("llmapi:history:user-1", 0, 999)
+
+    @pytest.mark.asyncio
+    async def test_custom_status(self):
+        import json
+        from auth import record_call
+
+        redis = AsyncMock()
+        await record_call("user-1", "/chat", "default", 0, 0, redis, status="error")
+        entry = json.loads(redis.lpush.call_args[0][1])
+        assert entry["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
 # require_admin
 # ---------------------------------------------------------------------------
 

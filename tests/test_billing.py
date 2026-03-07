@@ -1,4 +1,6 @@
-"""Tests for billing/usage endpoints: /usage, /usage/{model}, /limits, /billing."""
+"""Tests for billing/usage endpoints: /usage, /usage/{model}, /limits, /billing, /history."""
+
+import json
 
 from unittest.mock import AsyncMock, patch
 
@@ -218,3 +220,67 @@ class TestGetBilling:
         assert data["rate_limit"]["current_requests_per_day"] == 0
         assert data["usage"] == []
         assert data["limits"] == []
+
+
+class TestGetHistory:
+    def test_history_empty(self, billing_client, mock_redis):
+        mock_redis.llen = AsyncMock(return_value=0)
+        mock_redis.lrange = AsyncMock(return_value=[])
+        resp = billing_client.get("/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["user_id"] == "user-123"
+        assert data["total"] == 0
+        assert data["history"] == []
+
+    def test_history_with_entries(self, billing_client, mock_redis):
+        entries = [
+            json.dumps({
+                "timestamp": 1700000000.0,
+                "endpoint": "/chat",
+                "model": "default",
+                "prompt_tokens": 50,
+                "completion_tokens": 100,
+                "total_tokens": 150,
+                "status": "ok",
+            }),
+            json.dumps({
+                "timestamp": 1700000060.0,
+                "endpoint": "/completion",
+                "model": "default",
+                "prompt_tokens": 20,
+                "completion_tokens": 30,
+                "total_tokens": 50,
+                "status": "ok",
+            }),
+        ]
+        mock_redis.llen = AsyncMock(return_value=2)
+        mock_redis.lrange = AsyncMock(return_value=entries)
+        resp = billing_client.get("/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 2
+        assert len(data["history"]) == 2
+        assert data["history"][0]["endpoint"] == "/chat"
+        assert data["history"][0]["total_tokens"] == 150
+        assert data["history"][1]["endpoint"] == "/completion"
+
+    def test_history_pagination(self, billing_client, mock_redis):
+        mock_redis.llen = AsyncMock(return_value=100)
+        mock_redis.lrange = AsyncMock(return_value=[])
+        resp = billing_client.get("/history?offset=10&limit=5")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["offset"] == 10
+        assert data["limit"] == 5
+        mock_redis.lrange.assert_called_once_with(
+            "llmapi:history:user-123", 10, 14
+        )
+
+    def test_history_limit_capped_at_100(self, billing_client, mock_redis):
+        mock_redis.llen = AsyncMock(return_value=500)
+        mock_redis.lrange = AsyncMock(return_value=[])
+        resp = billing_client.get("/history?limit=200")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["limit"] == 100

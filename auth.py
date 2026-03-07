@@ -1,6 +1,7 @@
 """Authentication, rate limiting, and token usage tracking."""
 
 import hashlib
+import json
 import time
 from dataclasses import dataclass
 
@@ -144,6 +145,30 @@ async def record_usage(
         await redis.hincrby(key, "prompt_tokens", prompt_tokens)
     if completion_tokens:
         await redis.hincrby(key, "completion_tokens", completion_tokens)
+
+
+async def record_call(
+    user_id: str,
+    endpoint: str,
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    redis,
+    *,
+    status: str = "ok",
+) -> None:
+    key = f"llmapi:history:{user_id}"
+    entry = json.dumps({
+        "timestamp": time.time(),
+        "endpoint": endpoint,
+        "model": model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "status": status,
+    })
+    await redis.lpush(key, entry)
+    await redis.ltrim(key, 0, 999)
 
 
 def require_admin(user: User) -> None:

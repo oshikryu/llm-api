@@ -1,6 +1,7 @@
 """Tests for admin.py endpoints."""
 
 import asyncio
+import json
 
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -19,6 +20,8 @@ def mock_redis():
     mock_r.exists.return_value = True
     mock_r.smembers.return_value = set()
     mock_r.scan.return_value = ("0", [])
+    mock_r.llen.return_value = 0
+    mock_r.lrange.return_value = []
     from api import app
     app.state.redis = mock_r
     yield mock_r
@@ -262,6 +265,49 @@ class TestGetUsage:
     def test_get_usage_user_not_found(self, client, mock_redis):
         mock_redis.exists.return_value = False
         resp = client.get("/admin/users/nonexistent/usage")
+        assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# History
+# ---------------------------------------------------------------------------
+
+
+class TestGetUserHistory:
+    def test_get_history(self, client, mock_redis):
+        mock_redis.exists.return_value = True
+        entries = [
+            json.dumps({
+                "timestamp": 1700000000.0,
+                "endpoint": "/chat",
+                "model": "default",
+                "prompt_tokens": 50,
+                "completion_tokens": 100,
+                "total_tokens": 150,
+                "status": "ok",
+            }),
+        ]
+        mock_redis.llen = AsyncMock(return_value=1)
+        mock_redis.lrange = AsyncMock(return_value=entries)
+        resp = client.get("/admin/users/abc123/history")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["user_id"] == "abc123"
+        assert data["total"] == 1
+        assert len(data["history"]) == 1
+        assert data["history"][0]["endpoint"] == "/chat"
+
+    def test_get_history_empty(self, client, mock_redis):
+        mock_redis.exists.return_value = True
+        mock_redis.llen = AsyncMock(return_value=0)
+        mock_redis.lrange = AsyncMock(return_value=[])
+        resp = client.get("/admin/users/abc123/history")
+        assert resp.status_code == 200
+        assert resp.json()["history"] == []
+
+    def test_get_history_user_not_found(self, client, mock_redis):
+        mock_redis.exists.return_value = False
+        resp = client.get("/admin/users/nonexistent/history")
         assert resp.status_code == 404
 
 

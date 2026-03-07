@@ -124,6 +124,7 @@ All admin endpoints require an admin API key:
 | `/admin/users/{user_id}/limits/{model}` | PUT | Set token limit (`{"max_total_tokens": N}`) |
 | `/admin/users/{user_id}/rate-limit` | PUT | Set rate limits (`{"requests_per_minute": N, "requests_per_hour": N, "requests_per_day": N}`) |
 | `/admin/users/{user_id}/usage` | GET | Token usage per model |
+| `/admin/users/{user_id}/history` | GET | API call history (paginated) |
 
 ### Billing & Usage (Self-Service)
 
@@ -135,6 +136,7 @@ Any authenticated user can view their own token consumption and limits:
 | `/usage/{model}` | GET | Token usage for a specific model |
 | `/limits` | GET | Token limits with remaining budget and usage percentage |
 | `/billing` | GET | Full summary: usage, limits, and current rate limit status |
+| `/history` | GET | Recent API call history with per-request token usage (paginated) |
 
 ```bash
 # View all usage
@@ -178,6 +180,29 @@ Response from `/billing`:
 ```
 
 Models with no token limit set show `remaining_tokens: null` and `usage_percent: null`.
+
+Response from `/history?offset=0&limit=50`:
+```json
+{
+    "user_id": "abc123",
+    "total": 142,
+    "offset": 0,
+    "limit": 50,
+    "history": [
+        {
+            "timestamp": 1700000060.0,
+            "endpoint": "/chat",
+            "model": "default",
+            "prompt_tokens": 50,
+            "completion_tokens": 100,
+            "total_tokens": 150,
+            "status": "ok"
+        }
+    ]
+}
+```
+
+History is capped at the most recent 1000 entries per user. Use `offset` and `limit` (max 100) for pagination.
 
 ### Disabling Auth
 

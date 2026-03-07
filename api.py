@@ -37,6 +37,7 @@ from auth import (
     check_rate_limit,
     check_token_limit,
     record_usage,
+    record_call,
     get_rate_limit_config,
     get_rate_limit_counts,
 )
@@ -362,6 +363,46 @@ async def get_my_billing(
     )
 
 
+class CallHistoryEntry(BaseModel):
+    timestamp: float
+    endpoint: str
+    model: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    status: str
+
+
+class CallHistoryResponse(BaseModel):
+    user_id: str
+    total: int
+    offset: int
+    limit: int
+    history: list[CallHistoryEntry]
+
+
+@app.get("/history", response_model=CallHistoryResponse)
+async def get_my_history(
+    offset: int = 0,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
+    """View your recent API call history with per-request token usage."""
+    limit = min(limit, 100)
+    key = f"llmapi:history:{user.user_id}"
+    total = await redis.llen(key)
+    raw = await redis.lrange(key, offset, offset + limit - 1)
+    history = [CallHistoryEntry(**json.loads(entry)) for entry in raw]
+    return CallHistoryResponse(
+        user_id=user.user_id,
+        total=total,
+        offset=offset,
+        limit=limit,
+        history=history,
+    )
+
+
 @app.post("/completion", response_model=CompletionResponse)
 async def create_completion(
     request: CompletionRequest,
@@ -374,6 +415,7 @@ async def create_completion(
 
     result = await _do_completion(request)
     await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    await record_call(user.user_id, "/completion", MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
     return result
 
 
@@ -434,6 +476,7 @@ async def create_chat_completion(
 
     result = await _do_chat(request)
     await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    await record_call(user.user_id, "/chat", MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
     return result
 
 
@@ -580,6 +623,7 @@ async def create_chat_completion_stream(
                 messages.append({"role": "assistant", "content": content_chunk})
         finally:
             await record_usage(user.user_id, MODEL_NAME, 0, total_tokens, redis)
+            await record_call(user.user_id, "/chat/stream", MODEL_NAME, 0, total_tokens, redis)
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -681,6 +725,7 @@ async def query(
     )
     result = await _do_chat(chat_request)
     await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    await record_call(user.user_id, "/query", MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
 
     response_content = result.message.content
     structured = None
@@ -776,6 +821,7 @@ async def analyze_text(
     request = CompletionRequest(prompt=full_prompt, max_tokens=512, temperature=0.3)
     result = await _do_completion(request)
     await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    await record_call(user.user_id, "/analyze", MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
     return result
 
 

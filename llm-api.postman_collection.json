@@ -1075,6 +1075,34 @@
 						},
 						"description": "Carol's billing summary (120/min, 2000/hr, unlimited/day, unlimited tokens)."
 					}
+				},
+				{
+					"name": "Get My Call History",
+					"request": {
+						"method": "GET",
+						"url": {
+							"raw": "{{baseUrl}}/history?offset=0&limit=50",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"history"
+							],
+							"query": [
+								{
+									"key": "offset",
+									"value": "0",
+									"description": "Number of entries to skip (default 0)"
+								},
+								{
+									"key": "limit",
+									"value": "50",
+									"description": "Number of entries to return (default 50, max 100)"
+								}
+							]
+						},
+						"description": "View your recent API call history with per-request token usage. Returns most recent calls first. Capped at 1000 entries per user."
+					}
 				}
 			]
 		},
@@ -1544,6 +1572,40 @@
 									]
 								},
 								"description": "Requires running List Users first to populate userIdCarol."
+							}
+						}
+					]
+				},
+				{
+					"name": "History",
+					"item": [
+						{
+							"name": "Get User History (by user_id)",
+							"request": {
+								"method": "GET",
+								"url": {
+									"raw": "{{baseUrl}}/admin/users/{{user_id}}/history?offset=0&limit=50",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"admin",
+										"users",
+										"{{user_id}}",
+										"history"
+									],
+									"query": [
+										{
+											"key": "offset",
+											"value": "0"
+										},
+										{
+											"key": "limit",
+											"value": "50"
+										}
+									]
+								},
+								"description": "View a user's API call history with per-request token usage. Returns most recent calls first."
 							}
 						}
 					]
