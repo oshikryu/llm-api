@@ -1,0 +1,146 @@
+graph TB
+    subgraph Clients
+        CLI[CLI Client]
+        HTTP[HTTP Client]
+        CURL[cURL / Postman]
+    end
+
+    CLI & HTTP & CURL -->|API Key<br/>Bearer / X-API-Key| API
+
+    subgraph Docker["Docker Compose Stack"]
+        subgraph FastAPI["FastAPI App (api.py)"]
+            direction TB
+            HEALTH["/health<br/><i>no auth</i>"]
+
+            subgraph AuthLayer["Auth Middleware (auth.py)"]
+                GET_USER["get_current_user()<br/>SHA-256 key lookup"]
+                RATE["check_rate_limit()<br/>sliding window 60s"]
+                TOKEN_CHK["check_token_limit()<br/>per-user per-model"]
+            end
+
+            subgraph Endpoints["Protected Endpoints"]
+                COMP["/completion"]
+                CHAT["/chat"]
+                STREAM["/chat/stream"]
+                QUERY["/query (GET/POST)"]
+                ANALYZE["/analyze"]
+                RAG_EP["/rag"]
+                RAG_DOCS["/documents"]
+                RAG_SEARCH["/search"]
+                COLLECTIONS["/collections"]
+                CHAT_ASYNC["/chat/async"]
+                COMP_ASYNC["/completion/async"]
+                JOBS["/jobs/{job_id}"]
+            end
+
+            subgraph AdminEndpoints["Admin Endpoints (admin.py)"]
+                USERS_CRUD["/admin/users<br/>CRUD"]
+                KEYS_MGMT["/admin/users/{id}/keys<br/>create / revoke"]
+                LIMITS["/admin/users/{id}/limits/{model}<br/>set token cap"]
+                RATE_CFG["/admin/users/{id}/rate-limit<br/>set RPM"]
+                USAGE["/admin/users/{id}/usage<br/>view stats"]
+            end
+
+            subgraph Internals["Internal Helpers"]
+                DO_CHAT["_do_chat()"]
+                DO_COMP["_do_completion()"]
+                DO_QUERY["_do_query()"]
+                LLM_POST["_llm_post()<br/>semaphore-gated"]
+                RECORD["record_usage()"]
+            end
+        end
+
+        subgraph Worker["arq Worker (queue_worker.py)"]
+            PROC_CHAT["process_chat_completion"]
+            PROC_COMP["process_completion"]
+            WORKER_USAGE["_record_worker_usage()"]
+        end
+
+        subgraph LLMBackend["LLM Backend"]
+            NGINX["nginx<br/>least_conn LB"]
+            LLAMA1["llama-server-1"]
+            LLAMA2["llama-server-2"]
+        end
+
+        REDIS[("Redis 7<br/><i>Auth state, rate limits,<br/>usage tracking, arq queue</i>")]
+    end
+
+    %% Request flow
+    GET_USER -->|"lookup llmapi:apikey:{hash}"| REDIS
+    RATE -->|"ZREMRANGEBYSCORE / ZCARD / ZADD<br/>llmapi:ratelimit:{user}"| REDIS
+    TOKEN_CHK -->|"HGETALL<br/>llmapi:limits / llmapi:usage"| REDIS
+
+    Endpoints -->|auth + rate + token| AuthLayer
+
+    COMP --> DO_COMP
+    CHAT --> DO_CHAT
+    QUERY --> DO_QUERY
+    ANALYZE --> DO_COMP
+    RAG_EP --> DO_CHAT
+    DO_QUERY --> DO_CHAT
+
+    DO_CHAT --> LLM_POST
+    DO_COMP --> LLM_POST
+    STREAM --> LLM_POST
+
+    LLM_POST -->|httpx + semaphore| NGINX
+    NGINX --> LLAMA1
+    NGINX --> LLAMA2
+
+    COMP & CHAT & QUERY & ANALYZE & RAG_EP & STREAM -->|after response| RECORD
+    RECORD -->|"HINCRBY<br/>llmapi:usage:{user}:{model}"| REDIS
+
+    CHAT_ASYNC & COMP_ASYNC -->|"enqueue_job<br/>+ _user_id"| REDIS
+    REDIS -->|dequeue| PROC_CHAT & PROC_COMP
+    PROC_CHAT & PROC_COMP --> NGINX
+    PROC_CHAT & PROC_COMP --> WORKER_USAGE
+    WORKER_USAGE -->|"HINCRBY"| REDIS
+
+    AdminEndpoints -->|require_admin| AuthLayer
+    USERS_CRUD & KEYS_MGMT & LIMITS & RATE_CFG & USAGE --> REDIS
+
+    subgraph SeedCLI["Bootstrap"]
+        SEED["seed_admin.py<br/>create first admin + key"]
+    end
+    SEED -->|direct connect| REDIS
+
+    subgraph ConfigSrc["config.py"]
+        direction LR
+        CFG_AUTH["AUTH_ENABLED"]
+        CFG_MODEL["MODEL_NAME"]
+        CFG_RATE["DEFAULT_RATE_LIMIT"]
+        CFG_TOKEN["DEFAULT_TOKEN_LIMIT"]
+        CFG_LLAMA["LLAMA_SERVER_URL"]
+        CFG_REDIS["REDIS_URL"]
+        CFG_SLOTS["LLAMA_PARALLEL_SLOTS"]
+    end
+
+    subgraph RedisKeys["Redis Key Schema"]
+        direction LR
+        K1["llmapi:user:{id}<br/>Hash: name, created_at, is_admin"]
+        K2["llmapi:apikey:{sha256}<br/>String: user_id"]
+        K3["llmapi:user:{id}:keys<br/>Set: hash:prefix pairs"]
+        K4["llmapi:usage:{id}:{model}<br/>Hash: prompt_tokens, completion_tokens"]
+        K5["llmapi:limits:{id}:{model}<br/>Hash: max_total_tokens"]
+        K6["llmapi:ratelimit:{id}<br/>Sorted Set: timestamps"]
+        K7["llmapi:ratelimit_config:{id}<br/>Hash: requests_per_minute"]
+    end
+
+    %% Styling
+    classDef redis fill:#dc382c,color:#fff,stroke:#a0261e
+    classDef llm fill:#2d6a4f,color:#fff,stroke:#1b4332
+    classDef auth fill:#e76f51,color:#fff,stroke:#c45a3c
+    classDef admin fill:#264653,color:#fff,stroke:#1a323d
+    classDef endpoint fill:#457b9d,color:#fff,stroke:#2a5f7e
+    classDef internal fill:#6c757d,color:#fff,stroke:#495057
+    classDef config fill:#f4a261,color:#000,stroke:#e08a3c
+    classDef seed fill:#2a9d8f,color:#fff,stroke:#1f7a6e
+
+    class REDIS redis
+    class LLAMA1,LLAMA2,NGINX llm
+    class GET_USER,RATE,TOKEN_CHK auth
+    class USERS_CRUD,KEYS_MGMT,LIMITS,RATE_CFG,USAGE admin
+    class COMP,CHAT,STREAM,QUERY,ANALYZE,RAG_EP,RAG_DOCS,RAG_SEARCH,COLLECTIONS,CHAT_ASYNC,COMP_ASYNC,JOBS,HEALTH endpoint
+    class DO_CHAT,DO_COMP,DO_QUERY,LLM_POST,RECORD,PROC_CHAT,PROC_COMP,WORKER_USAGE internal
+    class CFG_AUTH,CFG_MODEL,CFG_RATE,CFG_TOKEN,CFG_LLAMA,CFG_REDIS,CFG_SLOTS config
+    class SEED seed

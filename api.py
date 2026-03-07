@@ -14,17 +14,28 @@ import uuid
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, HTTPException
+import redis.asyncio as aioredis
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, AsyncGenerator
 
 from config import (
+    AUTH_ENABLED,
     LLAMA_SERVER_URL,
     LLAMA_PARALLEL_SLOTS,
+    MODEL_NAME,
     REDIS_URL,
     REQUEST_TIMEOUT,
     STREAM_TIMEOUT,
+)
+from auth import (
+    User,
+    get_current_user,
+    get_redis,
+    check_rate_limit,
+    check_token_limit,
+    record_usage,
 )
 from rag import rag_router
 
@@ -46,6 +57,10 @@ async def lifespan(app: FastAPI):
     )
     llm_semaphore = asyncio.Semaphore(LLAMA_PARALLEL_SLOTS)
     try:
+        app.state.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+    except Exception:
+        app.state.redis = None
+    try:
         from arq import create_pool
         from arq.connections import RedisSettings
 
@@ -54,6 +69,8 @@ async def lifespan(app: FastAPI):
         arq_pool = None
     yield
     await http_client.aclose()
+    if app.state.redis is not None:
+        await app.state.redis.aclose()
     if arq_pool is not None:
         await arq_pool.aclose()
 
@@ -65,6 +82,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(rag_router, tags=["RAG"])
+
+from admin import router as admin_router
+app.include_router(admin_router, tags=["Admin"])
 
 
 class CompletionRequest(BaseModel):
@@ -128,8 +148,22 @@ async def health_check():
 
 
 @app.post("/completion", response_model=CompletionResponse)
-async def create_completion(request: CompletionRequest):
+async def create_completion(
+    request: CompletionRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """Generate text completion from a prompt."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
+    result = await _do_completion(request)
+    await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    return result
+
+
+async def _do_completion(request: CompletionRequest) -> CompletionResponse:
+    """Internal completion logic without auth dependencies."""
     payload = {
         "prompt": request.prompt,
         "n_predict": request.max_tokens,
@@ -174,8 +208,22 @@ def _looks_complete(content: str, tokens_generated: int, max_tokens: int) -> boo
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def create_chat_completion(request: ChatRequest):
+async def create_chat_completion(
+    request: ChatRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """Generate a chat completion (OpenAI-compatible endpoint)."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
+    result = await _do_chat(request)
+    await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    return result
+
+
+async def _do_chat(request: ChatRequest) -> ChatResponse:
+    """Internal chat logic without auth dependencies."""
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     full_content = ""
     total_completion_tokens = 0
@@ -243,68 +291,80 @@ async def create_chat_completion(request: ChatRequest):
 
 
 @app.post("/chat/stream")
-async def create_chat_completion_stream(request: ChatRequest):
+async def create_chat_completion_stream(
+    request: ChatRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """Stream chat completion with continuation support."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
 
     async def generate() -> AsyncGenerator[bytes, None]:
         messages = [{"role": m.role, "content": m.content} for m in request.messages]
         max_continuations = 25
+        total_tokens = 0
 
-        for iteration in range(max_continuations):
-            payload = {
-                "messages": messages,
-                "max_tokens": request.max_tokens,
-                "temperature": request.temperature,
-                "top_p": request.top_p,
-                "stream": True,
-            }
-            if request.stop:
-                payload["stop"] = request.stop
+        try:
+            for iteration in range(max_continuations):
+                payload = {
+                    "messages": messages,
+                    "max_tokens": request.max_tokens,
+                    "temperature": request.temperature,
+                    "top_p": request.top_p,
+                    "stream": True,
+                }
+                if request.stop:
+                    payload["stop"] = request.stop
 
-            content_chunk = ""
-            finish_reason = None
-            tokens_generated = 0
+                content_chunk = ""
+                finish_reason = None
+                tokens_generated = 0
 
-            async with llm_semaphore:
-                async with http_client.stream(
-                    "POST",
-                    "/v1/chat/completions",
-                    json=payload,
-                    timeout=STREAM_TIMEOUT,
-                ) as response:
-                    async for line in response.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data_str = line[6:]  # Remove "data: " prefix
-                        if data_str.strip() == "[DONE]":
-                            continue
+                async with llm_semaphore:
+                    async with http_client.stream(
+                        "POST",
+                        "/v1/chat/completions",
+                        json=payload,
+                        timeout=STREAM_TIMEOUT,
+                    ) as response:
+                        async for line in response.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
+                            data_str = line[6:]  # Remove "data: " prefix
+                            if data_str.strip() == "[DONE]":
+                                continue
 
-                        try:
-                            data = json.loads(data_str)
-                            choice = data.get("choices", [{}])[0]
-                            delta = choice.get("delta", {})
-                            token = delta.get("content", "")
-                            finish_reason = choice.get("finish_reason")
+                            try:
+                                data = json.loads(data_str)
+                                choice = data.get("choices", [{}])[0]
+                                delta = choice.get("delta", {})
+                                token = delta.get("content", "")
+                                finish_reason = choice.get("finish_reason")
 
-                            if token:
-                                content_chunk += token
-                                tokens_generated += 1
-                                yield token.encode("utf-8")
-                        except json.JSONDecodeError:
-                            continue
+                                if token:
+                                    content_chunk += token
+                                    tokens_generated += 1
+                                    yield token.encode("utf-8")
+                            except json.JSONDecodeError:
+                                continue
 
-            # Stop conditions
-            if not request.continue_until_done:
-                break
-            if finish_reason == "stop":
-                break
-            if _looks_complete(content_chunk, tokens_generated, request.max_tokens):
-                break
-            if len(content_chunk.strip()) < 10:
-                break
+                total_tokens += tokens_generated
 
-            # Append for next iteration
-            messages.append({"role": "assistant", "content": content_chunk})
+                # Stop conditions
+                if not request.continue_until_done:
+                    break
+                if finish_reason == "stop":
+                    break
+                if _looks_complete(content_chunk, tokens_generated, request.max_tokens):
+                    break
+                if len(content_chunk.strip()) < 10:
+                    break
+
+                # Append for next iteration
+                messages.append({"role": "assistant", "content": content_chunk})
+        finally:
+            await record_usage(user.user_id, MODEL_NAME, 0, total_tokens, redis)
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -378,11 +438,18 @@ def _try_parse_json(content: str) -> Optional[dict]:
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(
+    request: QueryRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """
     Query endpoint with structured output support.
     Automatically continues until the model finishes.
     """
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
     output_format = request.output_format or "markdown"
     system_prompt = _build_system_prompt(output_format, request.system_prompt)
 
@@ -397,7 +464,8 @@ async def query(request: QueryRequest):
         temperature=request.temperature,
         continue_until_done=True,
     )
-    result = await create_chat_completion(chat_request)
+    result = await _do_chat(chat_request)
+    await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
 
     response_content = result.message.content
     structured = None
@@ -420,8 +488,13 @@ async def query_get(
     format: str = "markdown",
     max_tokens: int = 512,
     temperature: float = 0.7,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
 ):
     """GET version for simple queries via URL."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
     request = QueryRequest(
         query=q,
         system_prompt=system,
@@ -429,15 +502,56 @@ async def query_get(
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    return await query(request)
+    result = await _do_query(request)
+    return result
+
+
+async def _do_query(request: QueryRequest) -> QueryResponse:
+    """Internal query logic without auth dependencies."""
+    output_format = request.output_format or "markdown"
+    system_prompt = _build_system_prompt(output_format, request.system_prompt)
+
+    messages = [
+        ChatMessage(role="system", content=system_prompt),
+        ChatMessage(role="user", content=request.query),
+    ]
+
+    chat_request = ChatRequest(
+        messages=messages,
+        max_tokens=request.max_tokens,
+        temperature=request.temperature,
+        continue_until_done=True,
+    )
+    result = await _do_chat(chat_request)
+
+    response_content = result.message.content
+    structured = None
+    if output_format == "json":
+        structured = _try_parse_json(response_content)
+
+    return QueryResponse(
+        query=request.query,
+        response=response_content,
+        format=output_format,
+        tokens_generated=result.tokens_generated,
+        structured=structured,
+    )
 
 
 @app.post("/analyze")
-async def analyze_text(prompt: str, context: Optional[str] = None):
+async def analyze_text(
+    prompt: str,
+    context: Optional[str] = None,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """
     Convenience endpoint for analyzing text with optional context.
     Useful for O-1A visa criteria assessment tasks.
     """
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
     full_prompt = ""
     if context:
         full_prompt = f"Context:\n{context}\n\nTask:\n{prompt}"
@@ -445,7 +559,9 @@ async def analyze_text(prompt: str, context: Optional[str] = None):
         full_prompt = prompt
 
     request = CompletionRequest(prompt=full_prompt, max_tokens=512, temperature=0.3)
-    return await create_completion(request)
+    result = await _do_completion(request)
+    await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -465,29 +581,48 @@ class JobStatusResponse(BaseModel):
 
 
 @app.post("/chat/async", response_model=AsyncJobResponse)
-async def create_chat_completion_async(request: ChatRequest):
+async def create_chat_completion_async(
+    request: ChatRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """Enqueue a chat completion job for async processing."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
     if arq_pool is None:
         raise HTTPException(status_code=503, detail="Queue not available (Redis not connected)")
     job_id = str(uuid.uuid4())
     request_data = request.model_dump()
+    request_data["_user_id"] = user.user_id
     await arq_pool.enqueue_job("process_chat_completion", request_data, _job_id=job_id)
     return AsyncJobResponse(job_id=job_id, status="queued")
 
 
 @app.post("/completion/async", response_model=AsyncJobResponse)
-async def create_completion_async(request: CompletionRequest):
+async def create_completion_async(
+    request: CompletionRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """Enqueue a completion job for async processing."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
     if arq_pool is None:
         raise HTTPException(status_code=503, detail="Queue not available (Redis not connected)")
     job_id = str(uuid.uuid4())
     request_data = request.model_dump()
+    request_data["_user_id"] = user.user_id
     await arq_pool.enqueue_job("process_completion", request_data, _job_id=job_id)
     return AsyncJobResponse(job_id=job_id, status="queued")
 
 
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str):
+async def get_job_status(
+    job_id: str,
+    user: User = Depends(get_current_user),
+):
     """Poll the status of an async job."""
     if arq_pool is None:
         raise HTTPException(status_code=503, detail="Queue not available (Redis not connected)")

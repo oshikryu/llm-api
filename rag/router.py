@@ -1,7 +1,16 @@
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from auth import (
+    User,
+    get_current_user,
+    get_redis,
+    check_rate_limit,
+    check_token_limit,
+    record_usage,
+)
+from config import MODEL_NAME
 from .models import (
     IngestRequest,
     IngestResponse,
@@ -23,7 +32,10 @@ Answer ONLY based on the provided context. If the context doesn't contain enough
 
 
 @router.post("/documents", response_model=IngestResponse)
-async def ingest_documents(request: IngestRequest):
+async def ingest_documents(
+    request: IngestRequest,
+    user: User = Depends(get_current_user),
+):
     """Ingest documents: chunk, embed, and store in vector database."""
     all_chunks: list[str] = []
     all_metadatas: list[dict] = []
@@ -56,7 +68,10 @@ async def ingest_documents(request: IngestRequest):
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest):
+async def search(
+    request: SearchRequest,
+    user: User = Depends(get_current_user),
+):
     """Semantic search across stored documents."""
     try:
         results = vectorstore.query_collection(
@@ -86,8 +101,15 @@ async def search(request: SearchRequest):
 
 
 @router.post("/rag", response_model=RAGResponse)
-async def rag(request: RAGRequest):
+async def rag(
+    request: RAGRequest,
+    user: User = Depends(get_current_user),
+    redis=Depends(get_redis),
+):
     """Full RAG: retrieve relevant chunks then generate answer with LLM."""
+    await check_rate_limit(user.user_id, redis)
+    await check_token_limit(user.user_id, MODEL_NAME, redis)
+
     try:
         results = vectorstore.query_collection(
             request.collection,
@@ -115,7 +137,7 @@ async def rag(request: RAGRequest):
 
     user_message = f"Context:\n{context_block}\n\nQuestion: {request.query}"
 
-    from api import create_chat_completion, ChatRequest, ChatMessage
+    from api import _do_chat, ChatRequest, ChatMessage
 
     chat_request = ChatRequest(
         messages=[
@@ -126,7 +148,8 @@ async def rag(request: RAGRequest):
         temperature=request.temperature,
         continue_until_done=True,
     )
-    result = await create_chat_completion(chat_request)
+    result = await _do_chat(chat_request)
+    await record_usage(user.user_id, MODEL_NAME, result.tokens_prompt, result.tokens_generated, redis)
 
     return RAGResponse(
         query=request.query,
@@ -138,7 +161,7 @@ async def rag(request: RAGRequest):
 
 
 @router.get("/collections", response_model=CollectionListResponse)
-async def list_collections():
+async def list_collections(user: User = Depends(get_current_user)):
     """List all collections."""
     collections = vectorstore.list_collections()
     return CollectionListResponse(
@@ -147,7 +170,7 @@ async def list_collections():
 
 
 @router.get("/collections/{name}", response_model=CollectionInfo)
-async def get_collection(name: str):
+async def get_collection(name: str, user: User = Depends(get_current_user)):
     """Get collection info."""
     try:
         info = vectorstore.get_collection_info(name)
@@ -157,7 +180,7 @@ async def get_collection(name: str):
 
 
 @router.delete("/collections/{name}")
-async def delete_collection(name: str):
+async def delete_collection(name: str, user: User = Depends(get_current_user)):
     """Delete a collection."""
     try:
         vectorstore.delete_collection(name)

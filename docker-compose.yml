@@ -34,6 +34,8 @@ services:
       - LLAMA_SERVER_URL=http://nginx:8080
       - LLAMA_PARALLEL_SLOTS=8
       - REDIS_URL=redis://redis:6379
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - MODEL_NAME=${MODEL_NAME:-default}
     depends_on:
       - nginx
       - redis
@@ -45,6 +47,7 @@ services:
       - LLAMA_SERVER_URL=http://nginx:8080
       - LLAMA_PARALLEL_SLOTS=8
       - REDIS_URL=redis://redis:6379
+      - MODEL_NAME=${MODEL_NAME:-default}
     depends_on:
       - nginx
       - redis
