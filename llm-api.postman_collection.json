@@ -11,8 +11,28 @@
 		},
 		{
 			"key": "apiKey",
-			"value": "llm-YOUR_API_KEY_HERE",
-			"description": "API key obtained from seed_admin.py or POST /admin/users/{id}/keys"
+			"value": "llm-bX3ZMo5tSDexqFi2VUO_NUn_Oj57l-LUBhYkAFXvV6k",
+			"description": "Admin API key (default auth for collection)"
+		},
+		{
+			"key": "apiKeyAdmin",
+			"value": "llm-bX3ZMo5tSDexqFi2VUO_NUn_Oj57l-LUBhYkAFXvV6k",
+			"description": "Admin — unlimited rate & tokens"
+		},
+		{
+			"key": "apiKeyAlice",
+			"value": "llm-s5ReOK6bcYtoQuGrCyG5UvWp4WZ1LcL6iHNfbSuQCZQ",
+			"description": "Alice — 60 req/min, 500k token limit"
+		},
+		{
+			"key": "apiKeyBob",
+			"value": "llm-LwXJHYWAbvJ4nVqK7gTGNcCLB4N_neMzkbu3fDZXIz0",
+			"description": "Bob — 30 req/min, 100k token limit"
+		},
+		{
+			"key": "apiKeyCarol",
+			"value": "llm-A9d_U44so-D-9lND5EWXBkvXoKuVw0DNUz-UD7GLPqI",
+			"description": "Carol (Power User) — 120 req/min, unlimited tokens"
 		},
 		{
 			"key": "job_id",
